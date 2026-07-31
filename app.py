@@ -31,9 +31,10 @@ RSS_FEEDS = [
 ]
 
 def clean_draft_text(raw_text):
-    """Extracts strictly the [CW: ...] section and drops any scratchpad reasoning."""
+    """Extracts strictly the LAST [CW: ...] section, stripping all scratchpad reasoning."""
     if "[CW:" in raw_text:
-        return "[CW:" + raw_text.split("[CW:", 1)[1].strip()
+        idx = raw_text.rfind("[CW:")
+        return raw_text[idx:].strip()
     return raw_text.strip()
 
 def get_candidate_models():
@@ -75,7 +76,7 @@ Format STRICTLY as:
 
 Source: {link}
 
-CRITICAL RULE: Do NOT include any bullet points, internal reasoning, or scratchpad text. Return ONLY the final formatted text.
+CRITICAL RULE: Do NOT include any internal reasoning, scratchpad text, or bullet points. Output ONLY the final draft block.
 """
 
     for model_name in models_to_try:
@@ -96,16 +97,16 @@ CRITICAL RULE: Do NOT include any bullet points, internal reasoning, or scratchp
 
     return None, last_debug
 
-def send_telegram_draft_debug(draft_text, article_url):
-    """Sends draft to Telegram and returns detailed response tuple (success_bool, debug_dict)."""
+def send_telegram_draft_debug(draft_text, article_id):
+    """Sends draft to Telegram using database ID for button callbacks (under 64-byte limit)."""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": draft_text,
         "reply_markup": {
             "inline_keyboard": [[
-                {"text": "✅ Approve & Post", "callback_data": f"approve|{article_url}"},
-                {"text": "❌ Reject", "callback_data": f"reject|{article_url}"}
+                {"text": "✅ Approve & Post", "callback_data": f"approve|{article_id}"},
+                {"text": "❌ Reject", "callback_data": f"reject|{article_id}"}
             ]]
         }
     }
@@ -150,12 +151,15 @@ def trigger_sample():
 
     draft, gemini_debug = generate_ai_draft_debug(title, snippet, link)
     if draft:
+        article_id = 1
         if supabase:
-            supabase.table("processed_articles").upsert({
+            res = supabase.table("processed_articles").upsert({
                 "url": link, "headline": title, "draft_text": draft, "status": "pending"
             }).execute()
+            if res.data:
+                article_id = res.data[0]["id"]
         
-        sent, tg_debug = send_telegram_draft_debug(draft, link)
+        sent, tg_debug = send_telegram_draft_debug(draft, article_id)
         return {
             "status": "Success" if sent else "Telegram Error",
             "telegram_sent": sent,
@@ -194,12 +198,14 @@ def run_monitor():
 
                 draft, _ = generate_ai_draft_debug(title, snippet, link)
                 if draft:
-                    supabase.table("processed_articles").insert({
+                    res = supabase.table("processed_articles").insert({
                         "url": link, "headline": title, "draft_text": draft, "status": "pending"
                     }).execute()
                     
-                    send_telegram_draft_debug(draft, link)
-                    processed_count += 1
+                    if res.data:
+                        article_id = res.data[0]["id"]
+                        send_telegram_draft_debug(draft, article_id)
+                        processed_count += 1
                 
                 time.sleep(4)
         except Exception as e:
@@ -212,21 +218,21 @@ async def telegram_webhook(request: Request):
     data = await request.json()
     if "callback_query" in data:
         callback = data["callback_query"]
-        action, article_url = callback["data"].split("|")
+        action, article_id = callback["data"].split("|")
         chat_id = callback["message"]["chat"]["id"]
         message_id = callback["message"]["message_id"]
 
         if action == "approve":
-            record = supabase.table("processed_articles").select("draft_text").eq("url", article_url).execute()
+            record = supabase.table("processed_articles").select("draft_text").eq("id", article_id).execute()
             if len(record.data) > 0:
                 draft_text = record.data[0]["draft_text"]
                 if post_to_threads(draft_text):
-                    supabase.table("processed_articles").update({"status": "published"}).eq("url", article_url).execute()
+                    supabase.table("processed_articles").update({"status": "published"}).eq("id", article_id).execute()
                     requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText", json={
                         "chat_id": chat_id, "message_id": message_id, "text": f"✅ PUBLISHED TO THREADS:\n\n{draft_text}"
                     })
         elif action == "reject":
-            supabase.table("processed_articles").update({"status": "rejected"}).eq("url", article_url).execute()
+            supabase.table("processed_articles").update({"status": "rejected"}).eq("id", article_id).execute()
             requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText", json={
                 "chat_id": chat_id, "message_id": message_id, "text": "❌ DISCARDED"
             })
