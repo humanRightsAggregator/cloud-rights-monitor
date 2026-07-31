@@ -6,17 +6,22 @@ from supabase import create_client, Client
 
 app = FastAPI()
 
-# Cloud Environment Variables (Configured in Render later)
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-META_ACCESS_TOKEN = os.environ.get("META_ACCESS_TOKEN")
-THREADS_USER_ID = os.environ.get("THREADS_USER_ID")
+# Cloud Environment Variables
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+META_ACCESS_TOKEN = os.environ.get("META_ACCESS_TOKEN", "")
+THREADS_USER_ID = os.environ.get("THREADS_USER_ID", "")
 
-# Initialize Supabase Client
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+# Safe Supabase DB Client Initialization
+supabase: Client = None
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception as e:
+        print(f"[!] Supabase Init Error: {e}")
 
 RSS_FEEDS = [
     "https://www.amnesty.org/en/rss/",
@@ -39,14 +44,18 @@ Source: {link}
 
 3. If irrelevant, an opinion piece, or meta-announcement, reply with ONLY: SKIP
 """
-   url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     try:
         res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=15)
+        if res.status_code != 200:
+            print(f"[!] Gemini HTTP Error {res.status_code}: {res.text}")
+            return "SKIP"
+            
         data = res.json()
         if "candidates" in data and len(data["candidates"]) > 0:
             return data["candidates"][0]["content"]["parts"][0]["text"].strip()
     except Exception as e:
-        print(f"Gemini API Error: {e}")
+        print(f"[!] Gemini Exception: {e}")
     return "SKIP"
 
 def send_telegram_draft(draft_text, article_url):
@@ -61,27 +70,28 @@ def send_telegram_draft(draft_text, article_url):
             ]]
         }
     }
-    requests.post(url, json=payload)
+    try:
+        requests.post(url, json=payload, timeout=10)
+    except Exception as e:
+        print(f"[!] Telegram Send Error: {e}")
 
 def post_to_threads(text):
     """Publishes text posts to Meta Threads via Graph API."""
     try:
-        # Container creation
         container_url = f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads"
         c_payload = {"media_type": "TEXT", "text": text[:500], "access_token": META_ACCESS_TOKEN}
-        c_res = requests.post(container_url, data=c_payload).json()
+        c_res = requests.post(container_url, data=c_payload, timeout=15).json()
         container_id = c_res.get("id")
 
         if not container_id:
-            print(f"Container Creation Failed: {c_res}")
+            print(f"[!] Container Creation Failed: {c_res}")
             return False
 
-        # Publishing container
         publish_url = f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads_publish"
-        p_res = requests.post(publish_url, data={"creation_id": container_id, "access_token": META_ACCESS_TOKEN}).json()
+        p_res = requests.post(publish_url, data={"creation_id": container_id, "access_token": META_ACCESS_TOKEN}, timeout=15).json()
         return "id" in p_res
     except Exception as e:
-        print(f"Threads Publishing Error: {e}")
+        print(f"[!] Threads Publishing Error: {e}")
         return False
 
 # ================= ENDPOINTS =================
@@ -94,32 +104,35 @@ def health_check():
 def run_monitor():
     """Triggered by Cron-Job.org."""
     if not supabase:
-        return {"error": "Supabase not configured"}
+        return {"error": "Supabase client not initialized"}
 
     processed_count = 0
     for feed_url in RSS_FEEDS:
-        feed = feedparser.parse(feed_url)
-        for entry in feed.entries[:5]:
-            link = entry.get('link', '')
-            title = entry.get('title', '')
-            snippet = entry.get('summary', '') or entry.get('description', '')
+        try:
+            feed = feedparser.parse(feed_url)
+            for entry in feed.entries[:5]:
+                link = entry.get('link', '')
+                title = entry.get('title', '')
+                snippet = entry.get('summary', '') or entry.get('description', '')
 
-            # Check database for duplicates
-            existing = supabase.table("processed_articles").select("url").eq("url", link).execute()
-            if len(existing.data) > 0:
-                continue
+                # Check database for duplicates
+                existing = supabase.table("processed_articles").select("url").eq("url", link).execute()
+                if len(existing.data) > 0:
+                    continue
 
-            draft = generate_ai_draft(title, snippet, link)
-            if draft != "SKIP" and not draft.startswith("SKIP"):
-                # Save pending draft to DB
-                supabase.table("processed_articles").insert({
-                    "url": link, "headline": title, "draft_text": draft, "status": "pending"
-                }).execute()
-                
-                # Push draft to mobile approval queue
-                send_telegram_draft(draft, link)
-                processed_count += 1
-                
+                draft = generate_ai_draft(title, snippet, link)
+                if draft != "SKIP" and not draft.startswith("SKIP"):
+                    # Save pending draft to DB
+                    supabase.table("processed_articles").insert({
+                        "url": link, "headline": title, "draft_text": draft, "status": "pending"
+                    }).execute()
+                    
+                    # Push draft to mobile approval queue
+                    send_telegram_draft(draft, link)
+                    processed_count += 1
+        except Exception as e:
+            print(f"[!] Feed processing error for {feed_url}: {e}")
+
     return {"status": "Complete", "items_queued": processed_count}
 
 @app.post("/telegram-webhook")
