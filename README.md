@@ -1,0 +1,1 @@
+# cloud-rights-monitor
