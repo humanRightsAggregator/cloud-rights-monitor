@@ -30,8 +30,32 @@ RSS_FEEDS = [
     "https://www.ohchr.org/en/rss.xml"
 ]
 
+def get_available_gemini_model():
+    """Queries Google AI Studio to find a model supported by your API key."""
+    list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
+    try:
+        res = requests.get(list_url, timeout=10)
+        if res.status_code == 200:
+            models = res.json().get("models", [])
+            # Prioritize fast/flash models that support generateContent
+            for m in models:
+                name = m.get("name", "").replace("models/", "")
+                methods = m.get("supportedGenerationMethods", [])
+                if "generateContent" in methods and "flash" in name.lower():
+                    return name
+            # Fallback to any model that supports generateContent
+            for m in models:
+                name = m.get("name", "").replace("models/", "")
+                methods = m.get("supportedGenerationMethods", [])
+                if "generateContent" in methods:
+                    return name
+    except Exception as e:
+        print(f"[!] Dynamic Model Lookup Error: {e}")
+    return "gemini-1.5-flash"  # Default fallback
+
 def generate_ai_draft_debug(title, snippet, link):
-    """Generates draft and returns (draft_text_or_none, debug_info_dict)."""
+    model_name = get_available_gemini_model()
+    
     prompt = f"""You are an objective human rights archivist. Analyze this item:
 Title: {title}
 Snippet: {snippet}
@@ -44,7 +68,7 @@ Task:
 
 Source: {link}
 """
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
     
     try:
         res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=15)
@@ -53,13 +77,13 @@ Source: {link}
             data = res.json()
             if "candidates" in data and len(data["candidates"]) > 0:
                 text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                return text, {"status_code": 200, "message": "Success"}
-            return None, {"status_code": 200, "message": f"No candidates returned", "raw_response": res.text}
+                return text, {"status_code": 200, "active_model": model_name}
+            return None, {"status_code": 200, "active_model": model_name, "message": "No candidates returned", "raw": res.text}
         else:
-            return None, {"status_code": res.status_code, "error_body": res.text}
+            return None, {"status_code": res.status_code, "active_model": model_name, "error_body": res.text}
             
     except Exception as e:
-        return None, {"status_code": "exception", "error_message": str(e)}
+        return None, {"status_code": "exception", "active_model": model_name, "error_message": str(e)}
 
 def send_telegram_draft(draft_text, article_url):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -121,7 +145,7 @@ def trigger_sample():
             }).execute()
         
         sent = send_telegram_draft(draft, link)
-        return {"status": "Success", "telegram_sent": sent, "headline": title, "draft": draft}
+        return {"status": "Success", "telegram_sent": sent, "headline": title, "draft": draft, "gemini_info": debug_info}
     
     return {
         "status": "Failed",
