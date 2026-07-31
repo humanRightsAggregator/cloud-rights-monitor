@@ -9,6 +9,8 @@ from services.database import (
 from services.ai_engine import generate_ai_draft
 from services.telegram import send_telegram_draft, edit_telegram_message
 from services.threads import post_to_threads
+from services.facebook import post_to_facebook
+from services.instagram import post_to_instagram
 
 app = FastAPI()
 
@@ -72,7 +74,6 @@ def run_monitor():
                     article_id = save_article_draft(link, title, draft, "pending")
                     send_telegram_draft(draft, article_id)
                     processed_count += 1
-                    # Append new draft locally so subsequent feed items in same run don't duplicate it
                     recent_topics.insert(0, {"headline": title, "draft_text": draft})
                 
                 time.sleep(4)
@@ -92,9 +93,20 @@ async def telegram_webhook(request: Request):
 
         if action == "approve":
             draft_text = get_draft_by_id(article_id)
-            if draft_text and post_to_threads(draft_text):
+            if draft_text:
+                # Multi-Platform Broadcast
+                threads_ok = post_to_threads(draft_text)
+                fb_ok = post_to_facebook(draft_text)
+                ig_ok = post_to_instagram(draft_text)
+
+                results = []
+                if threads_ok: results.append("Threads")
+                if fb_ok: results.append("Facebook")
+                if ig_ok: results.append("Instagram")
+
+                status_str = ", ".join(results) if results else "Failed to publish"
                 update_article_status(article_id, "published")
-                edit_telegram_message(chat_id, message_id, f"✅ PUBLISHED TO THREADS:\n\n{draft_text}")
+                edit_telegram_message(chat_id, message_id, f"✅ PUBLISHED TO [{status_str}]:\n\n{draft_text}")
         elif action == "reject":
             update_article_status(article_id, "rejected")
             edit_telegram_message(chat_id, message_id, "❌ DISCARDED")
