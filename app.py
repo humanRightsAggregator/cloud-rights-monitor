@@ -30,7 +30,8 @@ RSS_FEEDS = [
     "https://www.ohchr.org/en/rss.xml"
 ]
 
-def generate_ai_draft(title, snippet, link):
+def generate_ai_draft_debug(title, snippet, link):
+    """Generates draft and returns (draft_text_or_none, debug_info_dict)."""
     prompt = f"""You are an objective human rights archivist. Analyze this item:
 Title: {title}
 Snippet: {snippet}
@@ -45,26 +46,20 @@ Source: {link}
 """
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
     
-    for attempt in range(2):
-        try:
-            res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=15)
-            
-            if res.status_code == 429:
-                print(f"[!] Rate limited (429). Waiting 15s...")
-                time.sleep(15)
-                continue
-                
-            if res.status_code != 200:
-                print(f"[!] Gemini Error {res.status_code}: {res.text}")
-                return None
-                
+    try:
+        res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=15)
+        
+        if res.status_code == 200:
             data = res.json()
             if "candidates" in data and len(data["candidates"]) > 0:
-                return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-        except Exception as e:
-            print(f"[!] Gemini Exception: {e}")
+                text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                return text, {"status_code": 200, "message": "Success"}
+            return None, {"status_code": 200, "message": f"No candidates returned", "raw_response": res.text}
+        else:
+            return None, {"status_code": res.status_code, "error_body": res.text}
             
-    return None
+    except Exception as e:
+        return None, {"status_code": "exception", "error_message": str(e)}
 
 def send_telegram_draft(draft_text, article_url):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -109,7 +104,6 @@ def health_check():
 
 @app.get("/trigger-sample")
 def trigger_sample():
-    """Forces processing of a fresh RSS article straight to Telegram."""
     feed = feedparser.parse(RSS_FEEDS[0])
     if not feed.entries:
         return {"error": "Could not fetch RSS feed"}
@@ -119,19 +113,21 @@ def trigger_sample():
     title = entry.get('title', 'Human Rights Event Report')
     snippet = entry.get('summary', '') or entry.get('description', '') or title
 
-    draft = generate_ai_draft(title, snippet, link)
+    draft, debug_info = generate_ai_draft_debug(title, snippet, link)
     if draft:
-        # Save to DB
         if supabase:
             supabase.table("processed_articles").upsert({
                 "url": link, "headline": title, "draft_text": draft, "status": "pending"
             }).execute()
         
-        # Send directly to Telegram review channel
         sent = send_telegram_draft(draft, link)
         return {"status": "Success", "telegram_sent": sent, "headline": title, "draft": draft}
     
-    return {"status": "Failed", "reason": "Gemini API did not return a summary"}
+    return {
+        "status": "Failed",
+        "reason": "Gemini API did not return a summary",
+        "gemini_debug": debug_info
+    }
 
 @app.get("/run-monitor")
 def run_monitor():
@@ -154,7 +150,7 @@ def run_monitor():
                 if len(existing.data) > 0:
                     continue
 
-                draft = generate_ai_draft(title, snippet, link)
+                draft, _ = generate_ai_draft_debug(title, snippet, link)
                 if draft:
                     supabase.table("processed_articles").insert({
                         "url": link, "headline": title, "draft_text": draft, "status": "pending"
