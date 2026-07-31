@@ -1,7 +1,9 @@
 import requests
+import time
+import random
 from config import INSTAGRAM_ACCOUNT_ID, FB_PAGE_ACCESS_TOKEN
 
-# Fallback public image URL if article has no direct image (Instagram API requires an image URL)
+# Base image URL
 DEFAULT_IG_IMAGE = "https://images.unsplash.com/photo-1589829545856-d10d557cf95f?w=1080&q=80"
 
 def post_to_instagram(caption: str, image_url: str = None) -> bool:
@@ -10,7 +12,9 @@ def post_to_instagram(caption: str, image_url: str = None) -> bool:
         print("[!] Instagram credentials missing.")
         return False
 
-    media_url = image_url if image_url else DEFAULT_IG_IMAGE
+    # Add a random cache-buster to bypass Instagram's duplicate image spam filter
+    random_id = random.randint(1, 100000)
+    media_url = f"{image_url}&rand={random_id}" if image_url else f"{DEFAULT_IG_IMAGE}&rand={random_id}"
 
     try:
         # Step 1: Create Media Container
@@ -26,6 +30,9 @@ def post_to_instagram(caption: str, image_url: str = None) -> bool:
         if not container_id:
             print(f"[!] Instagram Container Creation Error: {c_res}")
             return False
+
+        # DELAY: Give Meta's servers 5 seconds to download and process the image
+        time.sleep(5)
 
         # Step 2: Publish Container
         publish_endpoint = f"https://graph.facebook.com/v20.0/{INSTAGRAM_ACCOUNT_ID}/media_publish"
