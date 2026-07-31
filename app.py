@@ -16,7 +16,7 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 META_ACCESS_TOKEN = os.environ.get("META_ACCESS_TOKEN", "")
 THREADS_USER_ID = os.environ.get("THREADS_USER_ID", "")
 
-# Initialize Supabase DB Client
+# Initialize Supabase Client
 supabase: Client = None
 if SUPABASE_URL and SUPABASE_KEY:
     try:
@@ -36,30 +36,27 @@ Title: {title}
 Snippet: {snippet}
 
 Task:
-1. Write a 2-sentence neutral factual summary.
+1. Write a neutral 2-sentence summary (Who, What, Where, When). Avoid emotional language.
 2. Format strictly as:
 [CW: Human Rights Report]
 <2-sentence factual summary>
 
 Source: {link}
-
-3. If non-incident or opinion, reply ONLY with: SKIP
 """
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
     
-    # Auto-retry with backoff if rate limited (HTTP 429)
     for attempt in range(2):
         try:
             res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=15)
             
             if res.status_code == 429:
-                print(f"[!] Rate limited (429). Waiting 15s... (Attempt {attempt + 1})")
+                print(f"[!] Rate limited (429). Waiting 15s...")
                 time.sleep(15)
                 continue
                 
             if res.status_code != 200:
-                print(f"[!] Gemini HTTP Error {res.status_code}: {res.text}")
-                return "SKIP"
+                print(f"[!] Gemini Error {res.status_code}: {res.text}")
+                return None
                 
             data = res.json()
             if "candidates" in data and len(data["candidates"]) > 0:
@@ -67,7 +64,7 @@ Source: {link}
         except Exception as e:
             print(f"[!] Gemini Exception: {e}")
             
-    return "SKIP"
+    return None
 
 def send_telegram_draft(draft_text, article_url):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -83,9 +80,10 @@ def send_telegram_draft(draft_text, article_url):
     }
     try:
         res = requests.post(url, json=payload, timeout=10)
-        return res.status_code == 200, res.text
+        return res.status_code == 200
     except Exception as e:
-        return False, str(e)
+        print(f"[!] Telegram Error: {e}")
+        return False
 
 def post_to_threads(text):
     try:
@@ -109,49 +107,31 @@ def post_to_threads(text):
 def health_check():
     return {"status": "System Online", "service": "Global Human Rights Monitor"}
 
-@app.get("/debug")
-def run_diagnostics():
-    results = {}
+@app.get("/trigger-sample")
+def trigger_sample():
+    """Forces processing of a fresh RSS article straight to Telegram."""
+    feed = feedparser.parse(RSS_FEEDS[0])
+    if not feed.entries:
+        return {"error": "Could not fetch RSS feed"}
+        
+    entry = feed.entries[0]
+    link = entry.get('link', 'https://example.com/test-article')
+    title = entry.get('title', 'Human Rights Event Report')
+    snippet = entry.get('summary', '') or entry.get('description', '') or title
 
-    # 1. Test Supabase Database
-    try:
-        db_res = supabase.table("processed_articles").select("id").limit(1).execute()
-        results["1_supabase_db"] = "OK (Connected)"
-    except Exception as e:
-        results["1_supabase_db"] = f"ERROR: {e}"
-
-    # 2. Test Gemini API
-    try:
-        g_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
-        g_res = requests.post(g_url, json={"contents": [{"parts": [{"text": "Hello"}]}]}, timeout=10)
-        if g_res.status_code == 200:
-            results["2_gemini_ai"] = "OK (API Key Valid & Ready)"
-        elif g_res.status_code == 429:
-            results["2_gemini_ai"] = "RATE LIMITED (429) - Free tier cooling down"
-        else:
-            results["2_gemini_ai"] = f"HTTP ERROR {g_res.status_code}: {g_res.text}"
-    except Exception as e:
-        results["2_gemini_ai"] = f"ERROR: {e}"
-
-    # 3. Test Telegram Bot Message Delivery
-    try:
-        t_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        t_res = requests.post(t_url, json={"chat_id": TELEGRAM_CHAT_ID, "text": "🔔 System Diagnostic Ping from Render Cloud!"}, timeout=10)
-        if t_res.status_code == 200:
-            results["3_telegram_bot"] = "OK (Message Sent)"
-        else:
-            results["3_telegram_bot"] = f"HTTP ERROR {t_res.status_code}: {t_res.text}"
-    except Exception as e:
-        results["3_telegram_bot"] = f"ERROR: {e}"
-
-    # 4. Test RSS Feed Parser
-    try:
-        f = feedparser.parse(RSS_FEEDS[0])
-        results["4_rss_feeds"] = f"OK ({len(f.entries)} articles fetched from Amnesty)"
-    except Exception as e:
-        results["4_rss_feeds"] = f"ERROR: {e}"
-
-    return results
+    draft = generate_ai_draft(title, snippet, link)
+    if draft:
+        # Save to DB
+        if supabase:
+            supabase.table("processed_articles").upsert({
+                "url": link, "headline": title, "draft_text": draft, "status": "pending"
+            }).execute()
+        
+        # Send directly to Telegram review channel
+        sent = send_telegram_draft(draft, link)
+        return {"status": "Success", "telegram_sent": sent, "headline": title, "draft": draft}
+    
+    return {"status": "Failed", "reason": "Gemini API did not return a summary"}
 
 @app.get("/run-monitor")
 def run_monitor():
@@ -162,7 +142,6 @@ def run_monitor():
     for feed_url in RSS_FEEDS:
         try:
             feed = feedparser.parse(feed_url)
-            # Process top 2 entries per feed to stay within free-tier API rate limits
             for entry in feed.entries[:2]:
                 link = entry.get('link', '')
                 title = entry.get('title', '')
@@ -176,7 +155,7 @@ def run_monitor():
                     continue
 
                 draft = generate_ai_draft(title, snippet, link)
-                if draft != "SKIP" and not draft.startswith("SKIP"):
+                if draft:
                     supabase.table("processed_articles").insert({
                         "url": link, "headline": title, "draft_text": draft, "status": "pending"
                     }).execute()
@@ -184,8 +163,7 @@ def run_monitor():
                     send_telegram_draft(draft, link)
                     processed_count += 1
                 
-                # 5-second pause between requests to respect free tier rate limit (10 RPM)
-                time.sleep(5)
+                time.sleep(4)
         except Exception as e:
             print(f"[!] Feed error: {e}")
 
