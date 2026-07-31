@@ -100,7 +100,6 @@ def health_check():
 
 @app.get("/debug")
 def run_diagnostics():
-    """Diagnostic suite testing all 4 system components."""
     results = {}
 
     # 1. Test Supabase Database
@@ -112,7 +111,7 @@ def run_diagnostics():
 
     # 2. Test Gemini API
     try:
-        g_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+        g_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
         g_res = requests.post(g_url, json={"contents": [{"parts": [{"text": "Hello"}]}]}, timeout=10)
         if g_res.status_code == 200:
             results["2_gemini_ai"] = "OK (API Key Valid)"
@@ -158,7 +157,6 @@ def run_monitor():
                 if not link:
                     continue
 
-                # Check database for duplicates
                 existing = supabase.table("processed_articles").select("url").eq("url", link).execute()
                 if len(existing.data) > 0:
                     continue
