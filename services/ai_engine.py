@@ -1,11 +1,20 @@
+import re
 import requests
 from config import GEMINI_API_KEY
 
 def clean_draft_text(raw_text: str) -> str:
-    """Strips internal scratchpad reasoning and extracts strictly the [CW: ...] section."""
-    if "[CW:" in raw_text:
-        idx = raw_text.rfind("[CW:")
+    """Extracts strictly what is inside <POST>...</POST> tags or detects SKIP status."""
+    if "<STATUS>SKIP</STATUS>" in raw_text or "SKIP" in raw_text and "<POST>" not in raw_text:
+        return "SKIP"
+
+    match = re.search(r"<POST>(.*?)</POST>", raw_text, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    
+    if "[CW:" in raw_text or "[UPDATE:" in raw_text:
+        idx = max(raw_text.find("[CW:"), raw_text.find("[UPDATE:"))
         return raw_text[idx:].strip()
+        
     return raw_text.strip()
 
 def get_candidate_models() -> list:
@@ -31,26 +40,52 @@ def get_candidate_models() -> list:
         candidates = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash"]
     return candidates
 
-def generate_ai_draft(title: str, snippet: str, link: str) -> tuple:
-    """Attempts candidate models to generate a clean summary draft.
-    Returns (clean_text_or_none, debug_dict).
-    """
+def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list = []) -> tuple:
+    """Evaluates candidate article against recent topics for duplicates, updates, or new reports."""
     models_to_try = get_candidate_models()
     last_debug = {}
 
-    prompt = f"""You are an empathetic, non-partisan human rights advocate.
+    # Format recent history for comparison
+    history_str = "None"
+    if recent_topics:
+        history_str = "\n".join([f"- {item.get('headline', '')}: {item.get('draft_text', '')[:100]}..." for item in recent_topics[:15]])
+
+    prompt = f"""You are an objective, empathetic global human rights advocate focused on universal human dignity, civilian safety, and fundamental rights.
+
+NEW ARTICLE TO EVALUATE:
 Title: {title}
 Snippet: {snippet}
+Source URL: {link}
 
-Task:
-Write a neutral 2-sentence summary highlighting the impact on human dignity.
-Format STRICTLY as:
-[CW: Human Rights Report]
-<2-sentence factual summary>
+RECENTLY COVERED TOPICS (Last 15 Posts):
+{history_str}
+
+EVALUATION RULES:
+1. **DUPLICATE CHECK**: If this new article covers the EXACT SAME event already present in RECENTLY COVERED TOPICS with NO meaningful new facts or updates, reply strictly with:
+<STATUS>SKIP</STATUS>
+
+2. **UPDATE CHECK**: If this article reports a SIGNIFICANT NEW DEVELOPMENT/UPDATE on a previously covered story, format as an update:
+<POST>
+[UPDATE: Human Rights Report]
+<2-sentence update highlighting the new development and human impact>
 
 Source: {link}
+#HumanRights #HumanDignity
+</POST>
 
-CRITICAL RULE: Do NOT include any internal reasoning, scratchpad text, or bullet points. Output ONLY the final draft block.
+3. **NEW STORY**: If this article is a completely new story/event not covered in the list:
+<POST>
+[CW: Human Rights Report]
+<2-sentence factual, empathetic summary focused on human dignity and civilian safety>
+
+Source: {link}
+#HumanRights #HumanDignity
+</POST>
+
+STRICT CONSTRAINTS:
+- Keep the final post under 450 characters.
+- Stay neutral, objective, and non-partisan. Do NOT target or generalize any religion, community, or region.
+- Output ONLY the <STATUS>SKIP</STATUS> tag or the <POST>...</POST> block. No extra commentary.
 """
 
     for model_name in models_to_try:
