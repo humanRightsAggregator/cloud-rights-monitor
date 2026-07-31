@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from config import RSS_FEEDS
 from services.database import (
     supabase, check_article_exists, save_article_draft,
-    get_draft_by_id, update_article_status
+    get_draft_by_id, update_article_status, get_recent_articles
 )
 from services.ai_engine import generate_ai_draft
 from services.telegram import send_telegram_draft, edit_telegram_message
@@ -27,8 +27,10 @@ def trigger_sample():
     title = entry.get('title', 'Human Rights Event Report')
     snippet = entry.get('summary', '') or entry.get('description', '') or title
 
-    draft, gemini_debug = generate_ai_draft(title, snippet, link)
-    if draft:
+    recent_topics = get_recent_articles(limit=15)
+    draft, gemini_debug = generate_ai_draft(title, snippet, link, recent_topics)
+    
+    if draft and draft != "SKIP":
         article_id = save_article_draft(link, title, draft, "pending")
         sent, tg_debug = send_telegram_draft(draft, article_id)
         return {
@@ -41,8 +43,8 @@ def trigger_sample():
         }
     
     return {
-        "status": "Failed",
-        "reason": "AI summary generation failed",
+        "status": "Skipped or Failed",
+        "result": draft if draft == "SKIP" else "AI Evaluation Failed",
         "gemini_debug": gemini_debug
     }
 
@@ -51,7 +53,9 @@ def run_monitor():
     if not supabase:
         return {"error": "Supabase client not initialized"}
 
+    recent_topics = get_recent_articles(limit=15)
     processed_count = 0
+
     for feed_url in RSS_FEEDS:
         try:
             feed = feedparser.parse(feed_url)
@@ -63,11 +67,13 @@ def run_monitor():
                 if not link or check_article_exists(link):
                     continue
 
-                draft, _ = generate_ai_draft(title, snippet, link)
-                if draft:
+                draft, _ = generate_ai_draft(title, snippet, link, recent_topics)
+                if draft and draft != "SKIP":
                     article_id = save_article_draft(link, title, draft, "pending")
                     send_telegram_draft(draft, article_id)
                     processed_count += 1
+                    # Append new draft locally so subsequent feed items in same run don't duplicate it
+                    recent_topics.insert(0, {"headline": title, "draft_text": draft})
                 
                 time.sleep(4)
         except Exception as e:
