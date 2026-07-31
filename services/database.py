@@ -10,7 +10,7 @@ if SUPABASE_URL and SUPABASE_KEY:
         print(f"[!] Supabase Init Error: {e}")
 
 def check_article_exists(url: str) -> bool:
-    """Checks if an article has already been saved in the database."""
+    """Checks if an article URL has already been saved in the database."""
     if not supabase:
         return False
     try:
@@ -19,6 +19,17 @@ def check_article_exists(url: str) -> bool:
     except Exception as e:
         print(f"[!] Supabase Select Error: {e}")
         return False
+
+def get_recent_articles(limit: int = 20) -> list:
+    """Fetches recent headlines and summaries to perform topic deduplication."""
+    if not supabase:
+        return []
+    try:
+        res = supabase.table("processed_articles").select("headline, draft_text").order("id", desc=True).limit(limit).execute()
+        return res.data if res.data else []
+    except Exception as e:
+        print(f"[!] Supabase Fetch Recent Error: {e}")
+        return []
 
 def save_article_draft(url: str, headline: str, draft_text: str, status: str = "pending") -> int:
     """Inserts or updates an article draft and returns its database ID."""
