@@ -1,138 +1,16 @@
-import os
 import time
-import requests
 import feedparser
 from fastapi import FastAPI, Request
-from supabase import create_client, Client
+from config import RSS_FEEDS
+from services.database import (
+    supabase, check_article_exists, save_article_draft,
+    get_draft_by_id, update_article_status
+)
+from services.ai_engine import generate_ai_draft
+from services.telegram import send_telegram_draft, edit_telegram_message
+from services.threads import post_to_threads
 
 app = FastAPI()
-
-# Cloud Environment Variables
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
-META_ACCESS_TOKEN = os.environ.get("META_ACCESS_TOKEN", "")
-THREADS_USER_ID = os.environ.get("THREADS_USER_ID", "")
-
-# Initialize Supabase Client
-supabase: Client = None
-if SUPABASE_URL and SUPABASE_KEY:
-    try:
-        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-    except Exception as e:
-        print(f"[!] Supabase Init Error: {e}")
-
-RSS_FEEDS = [
-    "https://www.amnesty.org/en/rss/",
-    "https://www.hrw.org/rss/news",
-    "https://www.ohchr.org/en/rss.xml"
-]
-
-def clean_draft_text(raw_text):
-    """Extracts strictly the LAST [CW: ...] section, stripping all scratchpad reasoning."""
-    if "[CW:" in raw_text:
-        idx = raw_text.rfind("[CW:")
-        return raw_text[idx:].strip()
-    return raw_text.strip()
-
-def get_candidate_models():
-    """Fetches all generateContent models available for this API key."""
-    list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
-    candidates = []
-    try:
-        res = requests.get(list_url, timeout=10)
-        if res.status_code == 200:
-            models = res.json().get("models", [])
-            for m in models:
-                name = m.get("name", "").replace("models/", "")
-                methods = m.get("supportedGenerationMethods", [])
-                if "generateContent" in methods:
-                    if "2.0-flash" in name or "1.5-flash" in name or "gemma" in name:
-                        candidates.insert(0, name)
-                    else:
-                        candidates.append(name)
-    except Exception as e:
-        print(f"[!] Model Listing Exception: {e}")
-    
-    if not candidates:
-        candidates = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash"]
-    return candidates
-
-def generate_ai_draft_debug(title, snippet, link):
-    models_to_try = get_candidate_models()
-    last_debug = {}
-
-    prompt = f"""You are an empathetic, non-partisan human rights advocate.
-Title: {title}
-Snippet: {snippet}
-
-Task:
-Write a neutral 2-sentence summary highlighting the impact on human dignity.
-Format STRICTLY as:
-[CW: Human Rights Report]
-<2-sentence factual summary>
-
-Source: {link}
-
-CRITICAL RULE: Do NOT include any internal reasoning, scratchpad text, or bullet points. Output ONLY the final draft block.
-"""
-
-    for model_name in models_to_try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-        try:
-            res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=15)
-            
-            if res.status_code == 200:
-                data = res.json()
-                if "candidates" in data and len(data["candidates"]) > 0:
-                    raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
-                    final_draft = clean_draft_text(raw_text)
-                    return final_draft, {"status_code": 200, "active_model": model_name}
-            else:
-                last_debug = {"status_code": res.status_code, "attempted_model": model_name, "error_body": res.text}
-        except Exception as e:
-            last_debug = {"status_code": "exception", "attempted_model": model_name, "error_message": str(e)}
-
-    return None, last_debug
-
-def send_telegram_draft_debug(draft_text, article_id):
-    """Sends draft to Telegram using database ID for button callbacks (under 64-byte limit)."""
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": draft_text,
-        "reply_markup": {
-            "inline_keyboard": [[
-                {"text": "✅ Approve & Post", "callback_data": f"approve|{article_id}"},
-                {"text": "❌ Reject", "callback_data": f"reject|{article_id}"}
-            ]]
-        }
-    }
-    try:
-        res = requests.post(url, json=payload, timeout=10)
-        return res.status_code == 200, {"status_code": res.status_code, "response": res.json() if res.status_code == 200 else res.text}
-    except Exception as e:
-        return False, {"error": str(e)}
-
-def post_to_threads(text):
-    try:
-        container_url = f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads"
-        c_payload = {"media_type": "TEXT", "text": text[:500], "access_token": META_ACCESS_TOKEN}
-        c_res = requests.post(container_url, data=c_payload, timeout=15).json()
-        container_id = c_res.get("id")
-
-        if not container_id:
-            return False
-
-        publish_url = f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads_publish"
-        p_res = requests.post(publish_url, data={"creation_id": container_id, "access_token": META_ACCESS_TOKEN}, timeout=15).json()
-        return "id" in p_res
-    except Exception as e:
-        return False
-
-# ================= ENDPOINTS =================
 
 @app.get("/")
 def health_check():
@@ -149,17 +27,10 @@ def trigger_sample():
     title = entry.get('title', 'Human Rights Event Report')
     snippet = entry.get('summary', '') or entry.get('description', '') or title
 
-    draft, gemini_debug = generate_ai_draft_debug(title, snippet, link)
+    draft, gemini_debug = generate_ai_draft(title, snippet, link)
     if draft:
-        article_id = 1
-        if supabase:
-            res = supabase.table("processed_articles").upsert({
-                "url": link, "headline": title, "draft_text": draft, "status": "pending"
-            }).execute()
-            if res.data:
-                article_id = res.data[0]["id"]
-        
-        sent, tg_debug = send_telegram_draft_debug(draft, article_id)
+        article_id = save_article_draft(link, title, draft, "pending")
+        sent, tg_debug = send_telegram_draft(draft, article_id)
         return {
             "status": "Success" if sent else "Telegram Error",
             "telegram_sent": sent,
@@ -171,8 +42,8 @@ def trigger_sample():
     
     return {
         "status": "Failed",
-        "reason": "All Gemini candidate models failed",
-        "last_gemini_debug": gemini_debug
+        "reason": "AI summary generation failed",
+        "gemini_debug": gemini_debug
     }
 
 @app.get("/run-monitor")
@@ -189,27 +60,18 @@ def run_monitor():
                 title = entry.get('title', '')
                 snippet = entry.get('summary', '') or entry.get('description', '')
 
-                if not link:
+                if not link or check_article_exists(link):
                     continue
 
-                existing = supabase.table("processed_articles").select("url").eq("url", link).execute()
-                if len(existing.data) > 0:
-                    continue
-
-                draft, _ = generate_ai_draft_debug(title, snippet, link)
+                draft, _ = generate_ai_draft(title, snippet, link)
                 if draft:
-                    res = supabase.table("processed_articles").insert({
-                        "url": link, "headline": title, "draft_text": draft, "status": "pending"
-                    }).execute()
-                    
-                    if res.data:
-                        article_id = res.data[0]["id"]
-                        send_telegram_draft_debug(draft, article_id)
-                        processed_count += 1
+                    article_id = save_article_draft(link, title, draft, "pending")
+                    send_telegram_draft(draft, article_id)
+                    processed_count += 1
                 
                 time.sleep(4)
         except Exception as e:
-            print(f"[!] Feed error: {e}")
+            print(f"[!] Feed processing error: {e}")
 
     return {"status": "Complete", "items_queued": processed_count}
 
@@ -223,18 +85,12 @@ async def telegram_webhook(request: Request):
         message_id = callback["message"]["message_id"]
 
         if action == "approve":
-            record = supabase.table("processed_articles").select("draft_text").eq("id", article_id).execute()
-            if len(record.data) > 0:
-                draft_text = record.data[0]["draft_text"]
-                if post_to_threads(draft_text):
-                    supabase.table("processed_articles").update({"status": "published"}).eq("id", article_id).execute()
-                    requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText", json={
-                        "chat_id": chat_id, "message_id": message_id, "text": f"✅ PUBLISHED TO THREADS:\n\n{draft_text}"
-                    })
+            draft_text = get_draft_by_id(article_id)
+            if draft_text and post_to_threads(draft_text):
+                update_article_status(article_id, "published")
+                edit_telegram_message(chat_id, message_id, f"✅ PUBLISHED TO THREADS:\n\n{draft_text}")
         elif action == "reject":
-            supabase.table("processed_articles").update({"status": "rejected"}).eq("id", article_id).execute()
-            requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText", json={
-                "chat_id": chat_id, "message_id": message_id, "text": "❌ DISCARDED"
-            })
+            update_article_status(article_id, "rejected")
+            edit_telegram_message(chat_id, message_id, "❌ DISCARDED")
 
     return {"status": "ok"}
