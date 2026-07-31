@@ -30,32 +30,35 @@ RSS_FEEDS = [
     "https://www.ohchr.org/en/rss.xml"
 ]
 
-def get_available_gemini_model():
-    """Queries Google AI Studio to find a model supported by your API key."""
+def get_candidate_models():
+    """Fetches all generateContent models available for this API key."""
     list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
+    candidates = []
     try:
         res = requests.get(list_url, timeout=10)
         if res.status_code == 200:
             models = res.json().get("models", [])
-            # Prioritize fast/flash models that support generateContent
-            for m in models:
-                name = m.get("name", "").replace("models/", "")
-                methods = m.get("supportedGenerationMethods", [])
-                if "generateContent" in methods and "flash" in name.lower():
-                    return name
-            # Fallback to any model that supports generateContent
             for m in models:
                 name = m.get("name", "").replace("models/", "")
                 methods = m.get("supportedGenerationMethods", [])
                 if "generateContent" in methods:
-                    return name
+                    # Put 2.0-flash and 1.5-flash first to avoid 2.5-flash daily quota caps
+                    if "2.0-flash" in name or "1.5-flash" in name:
+                        candidates.insert(0, name)
+                    else:
+                        candidates.append(name)
     except Exception as e:
-        print(f"[!] Dynamic Model Lookup Error: {e}")
-    return "gemini-1.5-flash"  # Default fallback
+        print(f"[!] Model Listing Exception: {e}")
+    
+    # Defaults if API discovery fails
+    if not candidates:
+        candidates = ["gemini-2.0-flash", "gemini-1.5-flash-8b", "gemini-1.5-flash", "gemini-2.5-flash"]
+    return candidates
 
 def generate_ai_draft_debug(title, snippet, link):
-    model_name = get_available_gemini_model()
-    
+    models_to_try = get_candidate_models()
+    last_debug = {}
+
     prompt = f"""You are an objective human rights archivist. Analyze this item:
 Title: {title}
 Snippet: {snippet}
@@ -68,22 +71,24 @@ Task:
 
 Source: {link}
 """
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-    
-    try:
-        res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=15)
-        
-        if res.status_code == 200:
-            data = res.json()
-            if "candidates" in data and len(data["candidates"]) > 0:
-                text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                return text, {"status_code": 200, "active_model": model_name}
-            return None, {"status_code": 200, "active_model": model_name, "message": "No candidates returned", "raw": res.text}
-        else:
-            return None, {"status_code": res.status_code, "active_model": model_name, "error_body": res.text}
+
+    for model_name in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+        try:
+            res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=15)
             
-    except Exception as e:
-        return None, {"status_code": "exception", "active_model": model_name, "error_message": str(e)}
+            if res.status_code == 200:
+                data = res.json()
+                if "candidates" in data and len(data["candidates"]) > 0:
+                    text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    return text, {"status_code": 200, "active_model": model_name}
+            else:
+                last_debug = {"status_code": res.status_code, "attempted_model": model_name, "error_body": res.text}
+                print(f"[!] Model {model_name} failed with HTTP {res.status_code}. Trying next model...")
+        except Exception as e:
+            last_debug = {"status_code": "exception", "attempted_model": model_name, "error_message": str(e)}
+
+    return None, last_debug
 
 def send_telegram_draft(draft_text, article_url):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -149,8 +154,8 @@ def trigger_sample():
     
     return {
         "status": "Failed",
-        "reason": "Gemini API did not return a summary",
-        "gemini_debug": debug_info
+        "reason": "All Gemini candidate models failed",
+        "last_gemini_debug": debug_info
     }
 
 @app.get("/run-monitor")
