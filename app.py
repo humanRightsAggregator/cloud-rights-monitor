@@ -30,6 +30,12 @@ RSS_FEEDS = [
     "https://www.ohchr.org/en/rss.xml"
 ]
 
+def clean_draft_text(raw_text):
+    """Extracts strictly the [CW: ...] section and drops any scratchpad reasoning."""
+    if "[CW:" in raw_text:
+        return "[CW:" + raw_text.split("[CW:", 1)[1].strip()
+    return raw_text.strip()
+
 def get_candidate_models():
     """Fetches all generateContent models available for this API key."""
     list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
@@ -42,34 +48,34 @@ def get_candidate_models():
                 name = m.get("name", "").replace("models/", "")
                 methods = m.get("supportedGenerationMethods", [])
                 if "generateContent" in methods:
-                    # Put 2.0-flash and 1.5-flash first to avoid 2.5-flash daily quota caps
-                    if "2.0-flash" in name or "1.5-flash" in name:
+                    if "2.0-flash" in name or "1.5-flash" in name or "gemma" in name:
                         candidates.insert(0, name)
                     else:
                         candidates.append(name)
     except Exception as e:
         print(f"[!] Model Listing Exception: {e}")
     
-    # Defaults if API discovery fails
     if not candidates:
-        candidates = ["gemini-2.0-flash", "gemini-1.5-flash-8b", "gemini-1.5-flash", "gemini-2.5-flash"]
+        candidates = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash"]
     return candidates
 
 def generate_ai_draft_debug(title, snippet, link):
     models_to_try = get_candidate_models()
     last_debug = {}
 
-    prompt = f"""You are an objective human rights archivist. Analyze this item:
+    prompt = f"""You are an empathetic, non-partisan human rights advocate.
 Title: {title}
 Snippet: {snippet}
 
 Task:
-1. Write a neutral 2-sentence summary (Who, What, Where, When). Avoid emotional language.
-2. Format strictly as:
+Write a neutral 2-sentence summary highlighting the impact on human dignity.
+Format STRICTLY as:
 [CW: Human Rights Report]
 <2-sentence factual summary>
 
 Source: {link}
+
+CRITICAL RULE: Do NOT include any bullet points, internal reasoning, or scratchpad text. Return ONLY the final formatted text.
 """
 
     for model_name in models_to_try:
@@ -80,17 +86,18 @@ Source: {link}
             if res.status_code == 200:
                 data = res.json()
                 if "candidates" in data and len(data["candidates"]) > 0:
-                    text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                    return text, {"status_code": 200, "active_model": model_name}
+                    raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
+                    final_draft = clean_draft_text(raw_text)
+                    return final_draft, {"status_code": 200, "active_model": model_name}
             else:
                 last_debug = {"status_code": res.status_code, "attempted_model": model_name, "error_body": res.text}
-                print(f"[!] Model {model_name} failed with HTTP {res.status_code}. Trying next model...")
         except Exception as e:
             last_debug = {"status_code": "exception", "attempted_model": model_name, "error_message": str(e)}
 
     return None, last_debug
 
-def send_telegram_draft(draft_text, article_url):
+def send_telegram_draft_debug(draft_text, article_url):
+    """Sends draft to Telegram and returns detailed response tuple (success_bool, debug_dict)."""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
@@ -104,10 +111,9 @@ def send_telegram_draft(draft_text, article_url):
     }
     try:
         res = requests.post(url, json=payload, timeout=10)
-        return res.status_code == 200
+        return res.status_code == 200, {"status_code": res.status_code, "response": res.json() if res.status_code == 200 else res.text}
     except Exception as e:
-        print(f"[!] Telegram Error: {e}")
-        return False
+        return False, {"error": str(e)}
 
 def post_to_threads(text):
     try:
@@ -142,20 +148,27 @@ def trigger_sample():
     title = entry.get('title', 'Human Rights Event Report')
     snippet = entry.get('summary', '') or entry.get('description', '') or title
 
-    draft, debug_info = generate_ai_draft_debug(title, snippet, link)
+    draft, gemini_debug = generate_ai_draft_debug(title, snippet, link)
     if draft:
         if supabase:
             supabase.table("processed_articles").upsert({
                 "url": link, "headline": title, "draft_text": draft, "status": "pending"
             }).execute()
         
-        sent = send_telegram_draft(draft, link)
-        return {"status": "Success", "telegram_sent": sent, "headline": title, "draft": draft, "gemini_info": debug_info}
+        sent, tg_debug = send_telegram_draft_debug(draft, link)
+        return {
+            "status": "Success" if sent else "Telegram Error",
+            "telegram_sent": sent,
+            "headline": title,
+            "clean_draft": draft,
+            "telegram_debug": tg_debug,
+            "gemini_info": gemini_debug
+        }
     
     return {
         "status": "Failed",
         "reason": "All Gemini candidate models failed",
-        "last_gemini_debug": debug_info
+        "last_gemini_debug": gemini_debug
     }
 
 @app.get("/run-monitor")
@@ -185,7 +198,7 @@ def run_monitor():
                         "url": link, "headline": title, "draft_text": draft, "status": "pending"
                     }).execute()
                     
-                    send_telegram_draft(draft, link)
+                    send_telegram_draft_debug(draft, link)
                     processed_count += 1
                 
                 time.sleep(4)
