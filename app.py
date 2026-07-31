@@ -53,8 +53,8 @@ Source: {link}
             res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=15)
             
             if res.status_code == 429:
-                print(f"[!] Rate limited (429). Waiting 10s... (Attempt {attempt + 1})")
-                time.sleep(10)
+                print(f"[!] Rate limited (429). Waiting 15s... (Attempt {attempt + 1})")
+                time.sleep(15)
                 continue
                 
             if res.status_code != 200:
@@ -127,7 +127,7 @@ def run_diagnostics():
         if g_res.status_code == 200:
             results["2_gemini_ai"] = "OK (API Key Valid & Ready)"
         elif g_res.status_code == 429:
-            results["2_gemini_ai"] = "RATE LIMITED (429) - Free tier cooling down (retry in 20s)"
+            results["2_gemini_ai"] = "RATE LIMITED (429) - Free tier cooling down"
         else:
             results["2_gemini_ai"] = f"HTTP ERROR {g_res.status_code}: {g_res.text}"
     except Exception as e:
@@ -162,7 +162,8 @@ def run_monitor():
     for feed_url in RSS_FEEDS:
         try:
             feed = feedparser.parse(feed_url)
-            for entry in feed.entries[:5]:
+            # Process top 2 entries per feed to stay within free-tier API rate limits
+            for entry in feed.entries[:2]:
                 link = entry.get('link', '')
                 title = entry.get('title', '')
                 snippet = entry.get('summary', '') or entry.get('description', '')
@@ -183,8 +184,8 @@ def run_monitor():
                     send_telegram_draft(draft, link)
                     processed_count += 1
                 
-                # Sleep 3 seconds between articles to respect Gemini free-tier limits
-                time.sleep(3)
+                # 5-second pause between requests to respect free tier rate limit (10 RPM)
+                time.sleep(5)
         except Exception as e:
             print(f"[!] Feed error: {e}")
 
