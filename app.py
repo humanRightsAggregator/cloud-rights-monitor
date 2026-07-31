@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 import feedparser
 from fastapi import FastAPI, Request
@@ -45,17 +46,27 @@ Source: {link}
 3. If non-incident or opinion, reply ONLY with: SKIP
 """
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
-    try:
-        res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=15)
-        if res.status_code != 200:
-            print(f"[!] Gemini HTTP Error {res.status_code}: {res.text}")
-            return "SKIP"
+    
+    # Auto-retry with backoff if rate limited (HTTP 429)
+    for attempt in range(2):
+        try:
+            res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=15)
             
-        data = res.json()
-        if "candidates" in data and len(data["candidates"]) > 0:
-            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-    except Exception as e:
-        print(f"[!] Gemini Exception: {e}")
+            if res.status_code == 429:
+                print(f"[!] Rate limited (429). Waiting 10s... (Attempt {attempt + 1})")
+                time.sleep(10)
+                continue
+                
+            if res.status_code != 200:
+                print(f"[!] Gemini HTTP Error {res.status_code}: {res.text}")
+                return "SKIP"
+                
+            data = res.json()
+            if "candidates" in data and len(data["candidates"]) > 0:
+                return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        except Exception as e:
+            print(f"[!] Gemini Exception: {e}")
+            
     return "SKIP"
 
 def send_telegram_draft(draft_text, article_url):
@@ -114,7 +125,9 @@ def run_diagnostics():
         g_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
         g_res = requests.post(g_url, json={"contents": [{"parts": [{"text": "Hello"}]}]}, timeout=10)
         if g_res.status_code == 200:
-            results["2_gemini_ai"] = "OK (API Key Valid)"
+            results["2_gemini_ai"] = "OK (API Key Valid & Ready)"
+        elif g_res.status_code == 429:
+            results["2_gemini_ai"] = "RATE LIMITED (429) - Free tier cooling down (retry in 20s)"
         else:
             results["2_gemini_ai"] = f"HTTP ERROR {g_res.status_code}: {g_res.text}"
     except Exception as e:
@@ -169,6 +182,9 @@ def run_monitor():
                     
                     send_telegram_draft(draft, link)
                     processed_count += 1
+                
+                # Sleep 3 seconds between articles to respect Gemini free-tier limits
+                time.sleep(3)
         except Exception as e:
             print(f"[!] Feed error: {e}")
 
