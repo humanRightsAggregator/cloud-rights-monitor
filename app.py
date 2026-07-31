@@ -15,7 +15,7 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 META_ACCESS_TOKEN = os.environ.get("META_ACCESS_TOKEN", "")
 THREADS_USER_ID = os.environ.get("THREADS_USER_ID", "")
 
-# Safe Supabase Client
+# Initialize Supabase DB Client
 supabase: Client = None
 if SUPABASE_URL and SUPABASE_KEY:
     try:
@@ -28,6 +28,35 @@ RSS_FEEDS = [
     "https://www.hrw.org/rss/news",
     "https://www.ohchr.org/en/rss.xml"
 ]
+
+def generate_ai_draft(title, snippet, link):
+    prompt = f"""You are an objective human rights archivist. Analyze this item:
+Title: {title}
+Snippet: {snippet}
+
+Task:
+1. Write a 2-sentence neutral factual summary.
+2. Format strictly as:
+[CW: Human Rights Report]
+<2-sentence factual summary>
+
+Source: {link}
+
+3. If non-incident or opinion, reply ONLY with: SKIP
+"""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    try:
+        res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=15)
+        if res.status_code != 200:
+            print(f"[!] Gemini HTTP Error {res.status_code}: {res.text}")
+            return "SKIP"
+            
+        data = res.json()
+        if "candidates" in data and len(data["candidates"]) > 0:
+            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except Exception as e:
+        print(f"[!] Gemini Exception: {e}")
+    return "SKIP"
 
 def send_telegram_draft(draft_text, article_url):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -43,40 +72,9 @@ def send_telegram_draft(draft_text, article_url):
     }
     try:
         res = requests.post(url, json=payload, timeout=10)
-        print(f"[+] Telegram API Response Status: {res.status_code}")
-        return res.status_code == 200
+        return res.status_code == 200, res.text
     except Exception as e:
-        print(f"[!] Telegram Send Error: {e}")
-        return False
-
-def generate_ai_draft(title, snippet, link):
-    prompt = f"""You are an objective human rights archivist. Summarize this item neutrally:
-Title: {title}
-Snippet: {snippet}
-
-Task:
-1. Write a 2-sentence neutral factual summary.
-2. Format as:
-[CW: Human Rights Report]
-<2-sentence factual summary>
-
-Source: {link}
-
-3. If non-incident or opinion, output ONLY: SKIP
-"""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-    try:
-        res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=15)
-        if res.status_code != 200:
-            print(f"[!] Gemini Error {res.status_code}: {res.text}")
-            return "SKIP"
-            
-        data = res.json()
-        if "candidates" in data and len(data["candidates"]) > 0:
-            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-    except Exception as e:
-        print(f"[!] Gemini Exception: {e}")
-    return "SKIP"
+        return False, str(e)
 
 def post_to_threads(text):
     try:
@@ -86,14 +84,12 @@ def post_to_threads(text):
         container_id = c_res.get("id")
 
         if not container_id:
-            print(f"[!] Container Creation Failed: {c_res}")
             return False
 
         publish_url = f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads_publish"
         p_res = requests.post(publish_url, data={"creation_id": container_id, "access_token": META_ACCESS_TOKEN}, timeout=15).json()
         return "id" in p_res
     except Exception as e:
-        print(f"[!] Threads Publishing Error: {e}")
         return False
 
 # ================= ENDPOINTS =================
@@ -102,12 +98,48 @@ def post_to_threads(text):
 def health_check():
     return {"status": "System Online", "service": "Global Human Rights Monitor"}
 
-@app.get("/test-telegram")
-def test_telegram():
-    """Direct test endpoint to verify Telegram notifications."""
-    test_text = "[CW: Human Rights Report]\nThis is a direct pipeline connection test from Render.\n\nSource: https://example.com/test"
-    success = send_telegram_draft(test_text, "https://example.com/test")
-    return {"telegram_sent": success, "target_chat_id": TELEGRAM_CHAT_ID}
+@app.get("/debug")
+def run_diagnostics():
+    """Diagnostic suite testing all 4 system components."""
+    results = {}
+
+    # 1. Test Supabase Database
+    try:
+        db_res = supabase.table("processed_articles").select("id").limit(1).execute()
+        results["1_supabase_db"] = "OK (Connected)"
+    except Exception as e:
+        results["1_supabase_db"] = f"ERROR: {e}"
+
+    # 2. Test Gemini API
+    try:
+        g_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+        g_res = requests.post(g_url, json={"contents": [{"parts": [{"text": "Hello"}]}]}, timeout=10)
+        if g_res.status_code == 200:
+            results["2_gemini_ai"] = "OK (API Key Valid)"
+        else:
+            results["2_gemini_ai"] = f"HTTP ERROR {g_res.status_code}: {g_res.text}"
+    except Exception as e:
+        results["2_gemini_ai"] = f"ERROR: {e}"
+
+    # 3. Test Telegram Bot Message Delivery
+    try:
+        t_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        t_res = requests.post(t_url, json={"chat_id": TELEGRAM_CHAT_ID, "text": "🔔 System Diagnostic Ping from Render Cloud!"}, timeout=10)
+        if t_res.status_code == 200:
+            results["3_telegram_bot"] = "OK (Message Sent)"
+        else:
+            results["3_telegram_bot"] = f"HTTP ERROR {t_res.status_code}: {t_res.text}"
+    except Exception as e:
+        results["3_telegram_bot"] = f"ERROR: {e}"
+
+    # 4. Test RSS Feed Parser
+    try:
+        f = feedparser.parse(RSS_FEEDS[0])
+        results["4_rss_feeds"] = f"OK ({len(f.entries)} articles fetched from Amnesty)"
+    except Exception as e:
+        results["4_rss_feeds"] = f"ERROR: {e}"
+
+    return results
 
 @app.get("/run-monitor")
 def run_monitor():
@@ -129,23 +161,18 @@ def run_monitor():
                 # Check database for duplicates
                 existing = supabase.table("processed_articles").select("url").eq("url", link).execute()
                 if len(existing.data) > 0:
-                    print(f"[-] Already processed: {link[:40]}...")
                     continue
 
                 draft = generate_ai_draft(title, snippet, link)
                 if draft != "SKIP" and not draft.startswith("SKIP"):
-                    # Save pending draft to DB
                     supabase.table("processed_articles").insert({
                         "url": link, "headline": title, "draft_text": draft, "status": "pending"
                     }).execute()
                     
-                    # Push draft to mobile approval queue
                     send_telegram_draft(draft, link)
                     processed_count += 1
-                else:
-                    print(f"[-] Gemini output SKIP for: {title[:40]}...")
         except Exception as e:
-            print(f"[!] Feed processing error for {feed_url}: {e}")
+            print(f"[!] Feed error: {e}")
 
     return {"status": "Complete", "items_queued": processed_count}
 
