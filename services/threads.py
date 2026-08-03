@@ -3,10 +3,14 @@ import time
 from config import THREADS_USER_ID, META_ACCESS_TOKEN
 
 def post_to_threads(text: str, image_url: str = None) -> bool:
-    """Publishes a text or image post to Threads."""
+    """Publishes a post to Threads, enforcing the 500-character limit."""
     if not THREADS_USER_ID or not META_ACCESS_TOKEN:
         print("[!] Threads credentials missing.")
         return False
+
+    # Enforce strict 500-character Threads limit
+    if len(text) > 495:
+        text = text[:490].rsplit(' ', 1)[0] + "..."
 
     try:
         create_url = f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads"
