@@ -6,6 +6,7 @@ from services.database import (
     supabase, check_article_exists, save_article_draft, get_recent_articles
 )
 from services.ai_engine import generate_ai_draft
+from services.media_extractor import extract_article_image
 from services.telegram import send_telegram_notification
 from services.threads import post_to_threads
 from services.facebook import post_to_facebook
@@ -15,7 +16,6 @@ app = FastAPI()
 
 @app.get("/")
 def health_check():
-    """Lightweight endpoint for cron wake-up call"""
     return {"status": "System Online", "service": "Global Human Rights Monitor"}
 
 @app.get("/run-monitor")
@@ -37,12 +37,15 @@ def run_monitor():
                 if not link or check_article_exists(link):
                     continue
 
+                # Extract the specific article image
+                article_image = extract_article_image(entry, link)
+
                 draft, _ = generate_ai_draft(title, snippet, link, recent_topics)
                 if draft and draft != "SKIP":
-                    # 1. Auto-broadcast directly to social platforms
-                    threads_ok = post_to_threads(draft)
-                    fb_ok = post_to_facebook(draft)
-                    ig_ok = post_to_instagram(draft)
+                    # Broadcast to platforms with the specific article image
+                    threads_ok = post_to_threads(draft, article_image)
+                    fb_ok = post_to_facebook(draft, link, article_image)
+                    ig_ok = post_to_instagram(draft, article_image)
 
                     platform_results = {
                         "Threads": threads_ok,
@@ -50,10 +53,7 @@ def run_monitor():
                         "Instagram": ig_ok
                     }
 
-                    # 2. Record in database as published
                     save_article_draft(link, title, draft, "published")
-
-                    # 3. Send Telegram notification summary
                     send_telegram_notification(draft, title, platform_results)
 
                     processed_count += 1
