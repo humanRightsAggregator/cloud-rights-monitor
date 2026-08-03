@@ -1,16 +1,23 @@
 import requests
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 
-def send_telegram_notification(draft_text: str, headline: str, platforms: list) -> bool:
-    """Sends a post-publication acknowledgment notification to Telegram."""
+def send_telegram_notification(draft_text: str, headline: str, results: dict) -> bool:
+    """Sends a detailed post-publication acknowledgment notification to Telegram."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("[!] Telegram credentials missing.")
         return False
 
-    platform_str = ", ".join(platforms) if platforms else "Failed to publish"
+    status_lines = []
+    for platform, success in results.items():
+        icon = "✅" if success else "❌"
+        status_lines.append(f"{icon} *{platform}*")
+    
+    status_summary = "\n".join(status_lines)
+
     message_text = (
-        f"📢 *AUTO-PUBLISHED TO [{platform_str}]*\n\n"
+        f"📢 *AUTO-PUBLISH SUMMARY*\n\n"
         f"📌 *Headline:* {headline}\n\n"
+        f"📊 *Platform Status:*\n{status_summary}\n\n"
         f"📝 *Post Content:*\n{draft_text}"
     )
 
