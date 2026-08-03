@@ -20,7 +20,8 @@ def post_to_facebook(text: str, link: str = None, image_url: str = None) -> bool
                 "caption": message,
                 "access_token": FB_PAGE_ACCESS_TOKEN
             }
-            res = requests.post(url, data=payload, timeout=15)
+            # Increased timeout to 30s to allow Meta to download larger images
+            res = requests.post(url, data=payload, timeout=30)
             data = res.json()
             if "id" in data:
                 print(f"[+] Published Photo to Facebook Page: {data['id']}")
@@ -37,7 +38,7 @@ def post_to_facebook(text: str, link: str = None, image_url: str = None) -> bool
         if link:
             payload["link"] = link
 
-        res = requests.post(url, data=payload, timeout=15)
+        res = requests.post(url, data=payload, timeout=30)
         data = res.json()
         if "id" in data:
             print(f"[+] Published Feed to Facebook Page: {data['id']}")
