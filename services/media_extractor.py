@@ -2,7 +2,7 @@ import re
 import requests
 
 def extract_article_image(entry, link: str = None) -> str:
-    """Extracts a valid article image URL from RSS metadata or OpenGraph tags."""
+    """Extracts a valid article image URL from RSS entry, summary HTML, or web page metadata."""
     candidate_urls = []
 
     # 1. Check RSS media:content
@@ -23,11 +23,18 @@ def extract_article_image(entry, link: str = None) -> str:
             if isinstance(enc, dict) and 'href' in enc:
                 candidate_urls.append(enc['href'])
 
-    # 4. Scrape og:image tag from article webpage
+    # 4. Check HTML <img> tags in RSS summary/description
+    summary_html = entry.get('summary', '') or entry.get('description', '')
+    if summary_html:
+        img_matches = re.findall(r'<img[^>]+src=["\']([^"\']+)["\']', summary_html, re.IGNORECASE)
+        for img in img_matches:
+            candidate_urls.append(img)
+
+    # 5. Scrape og:image tag from article webpage
     if link:
         try:
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
             res = requests.get(link, headers=headers, timeout=8)
             if res.status_code == 200:
@@ -39,17 +46,18 @@ def extract_article_image(entry, link: str = None) -> str:
         except Exception as e:
             print(f"[!] Could not scrape og:image from {link}: {e}")
 
-    # Prioritize JPEG/JPG files
+    # Return the first valid HTTP image URL found (excluding icons/pixels)
     for url in candidate_urls:
-        if not url or not url.startswith('http'):
+        if not url or not isinstance(url, str):
             continue
-        clean_path = url.split('?')[0].lower()
-        if clean_path.endswith('.jpg') or clean_path.endswith('.jpeg'):
-            return url
+        url = url.strip()
+        if not url.startswith('http'):
+            continue
+        if any(ignored in url.lower() for ignored in ['icon', 'avatar', 'logo', 'pixel', '1x1']):
+            continue
 
-    # Fallback to PNG or other valid HTTP images (excluding webp)
-    for url in candidate_urls:
-        if url and url.startswith('http') and not url.split('?')[0].lower().endswith('.webp'):
-            return url
+        print(f"[+] Extracted Article Image: {url}")
+        return url
 
+    print("[-] No image extracted for this article.")
     return None
