@@ -44,16 +44,17 @@ def run_monitor():
                     fb_ok = post_to_facebook(draft)
                     ig_ok = post_to_instagram(draft)
 
-                    published_platforms = []
-                    if threads_ok: published_platforms.append("Threads")
-                    if fb_ok: published_platforms.append("Facebook")
-                    if ig_ok: published_platforms.append("Instagram")
+                    platform_results = {
+                        "Threads": threads_ok,
+                        "Facebook": fb_ok,
+                        "Instagram": ig_ok
+                    }
 
                     # 2. Record in database as published
                     save_article_draft(link, title, draft, "published")
 
-                    # 3. Send Telegram notification acknowledgment
-                    send_telegram_notification(draft, title, published_platforms)
+                    # 3. Send Telegram notification summary
+                    send_telegram_notification(draft, title, platform_results)
 
                     processed_count += 1
                     recent_topics.insert(0, {"headline": title, "draft_text": draft})
