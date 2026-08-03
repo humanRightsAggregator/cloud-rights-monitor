@@ -14,12 +14,14 @@ from services.instagram import post_to_instagram
 
 app = FastAPI()
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def health_check():
+    """Lightweight endpoint for wake-up calls (supports GET and HEAD)."""
     return {"status": "System Online", "service": "Global Human Rights Monitor"}
 
-@app.get("/run-monitor")
+@app.api_route("/run-monitor", methods=["GET", "HEAD"])
 def run_monitor():
+    """Main execution pipeline."""
     if not supabase:
         return {"error": "Supabase client not initialized"}
 
@@ -37,12 +39,10 @@ def run_monitor():
                 if not link or check_article_exists(link):
                     continue
 
-                # Extract the specific article image
                 article_image = extract_article_image(entry, link)
-
                 draft, _ = generate_ai_draft(title, snippet, link, recent_topics)
+
                 if draft and draft != "SKIP":
-                    # Broadcast to platforms with the specific article image
                     threads_ok = post_to_threads(draft, article_image)
                     fb_ok = post_to_facebook(draft, link, article_image)
                     ig_ok = post_to_instagram(draft, article_image)
@@ -61,6 +61,6 @@ def run_monitor():
 
                 time.sleep(4)
         except Exception as e:
-            print(f"[!] Feed processing error: {e}")
+            print(f"[!] Feed processing exception: {e}")
 
     return {"status": "Complete", "items_published": processed_count}
