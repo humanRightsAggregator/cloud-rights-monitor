@@ -15,7 +15,7 @@ from services.instagram import post_to_instagram
 app = FastAPI()
 
 def process_feeds_task():
-    """Background worker processing feeds and social posting."""
+    """Background worker processing feeds, generating tailored AI drafts, and posting."""
     print("[*] Starting background feed monitor run...")
     recent_topics = get_recent_articles(limit=15)
     processed_count = 0
@@ -31,13 +31,20 @@ def process_feeds_task():
                 if not link or check_article_exists(link):
                     continue
 
+                # 1. Extract image via RSS, Scraper, or Microlink API
                 article_image = extract_article_image(entry, link)
-                draft, _ = generate_ai_draft(title, snippet, link, recent_topics)
 
-                if draft and draft != "SKIP":
-                    threads_ok = post_to_threads(draft, article_image)
-                    fb_ok = post_to_facebook(draft, link, article_image)
-                    ig_ok = post_to_instagram(draft, article_image)
+                # 2. Generate Human-POV AI drafts with Master & Dynamic Hashtags
+                drafts, err = generate_ai_draft(title, snippet, link, recent_topics)
+
+                if drafts and isinstance(drafts, dict):
+                    threads_text = drafts.get("threads", "")
+                    long_text = drafts.get("long", "")
+
+                    # 3. Synchronous broadcasting tailored by platform limits
+                    threads_ok = post_to_threads(threads_text, article_image)
+                    fb_ok = post_to_facebook(long_text, link, article_image)
+                    ig_ok = post_to_instagram(long_text, article_image)
 
                     platform_results = {
                         "Threads": threads_ok,
@@ -45,11 +52,14 @@ def process_feeds_task():
                         "Instagram": ig_ok
                     }
 
-                    save_article_draft(link, title, draft, "published")
-                    send_telegram_notification(draft, title, platform_results)
+                    # 4. Save record to database
+                    save_article_draft(link, title, long_text, "published")
+
+                    # 5. Send Telegram notification report
+                    send_telegram_notification(long_text, title, platform_results)
 
                     processed_count += 1
-                    recent_topics.insert(0, {"headline": title, "draft_text": draft})
+                    recent_topics.insert(0, {"headline": title, "draft_text": long_text})
 
                 time.sleep(4)
         except Exception as e:
@@ -59,12 +69,12 @@ def process_feeds_task():
 
 @app.api_route("/", methods=["GET", "HEAD"])
 def health_check():
-    """Lightweight health check for cron wake-up call."""
+    """Lightweight endpoint for cron wake-up ping."""
     return {"status": "System Online", "service": "Global Human Rights Monitor"}
 
 @app.api_route("/run-monitor", methods=["GET", "HEAD"])
 def run_monitor(background_tasks: BackgroundTasks):
-    """Responds immediately to cron-job.org to prevent timeouts, runs monitor in background."""
+    """Responds instantly to prevent network timeouts, running execution in background."""
     background_tasks.add_task(process_feeds_task)
     return {
         "status": "Accepted",
