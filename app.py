@@ -1,6 +1,6 @@
 import time
 import feedparser
-from fastapi import FastAPI
+from fastapi import FastAPI, BackgroundTasks
 from config import RSS_FEEDS
 from services.database import (
     supabase, check_article_exists, save_article_draft, get_recent_articles
@@ -14,17 +14,9 @@ from services.instagram import post_to_instagram
 
 app = FastAPI()
 
-@app.api_route("/", methods=["GET", "HEAD"])
-def health_check():
-    """Lightweight endpoint for wake-up calls (supports GET and HEAD)."""
-    return {"status": "System Online", "service": "Global Human Rights Monitor"}
-
-@app.api_route("/run-monitor", methods=["GET", "HEAD"])
-def run_monitor():
-    """Main execution pipeline."""
-    if not supabase:
-        return {"error": "Supabase client not initialized"}
-
+def process_feeds_task():
+    """Background worker processing feeds and social posting."""
+    print("[*] Starting background feed monitor run...")
     recent_topics = get_recent_articles(limit=15)
     processed_count = 0
 
@@ -63,4 +55,19 @@ def run_monitor():
         except Exception as e:
             print(f"[!] Feed processing exception: {e}")
 
-    return {"status": "Complete", "items_published": processed_count}
+    print(f"[+] Background monitor run complete. Items published: {processed_count}")
+
+@app.api_route("/", methods=["GET", "HEAD"])
+def health_check():
+    """Lightweight health check for cron wake-up call."""
+    return {"status": "System Online", "service": "Global Human Rights Monitor"}
+
+@app.api_route("/run-monitor", methods=["GET", "HEAD"])
+def run_monitor(background_tasks: BackgroundTasks):
+    """Responds immediately to cron-job.org to prevent timeouts, runs monitor in background."""
+    background_tasks.add_task(process_feeds_task)
+    return {
+        "status": "Accepted",
+        "message": "Monitor task launched in background",
+        "timestamp": time.time()
+    }
