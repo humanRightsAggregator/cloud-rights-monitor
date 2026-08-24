@@ -1,0 +1,25 @@
+name: Global Human Rights Monitor Scheduler
+
+on:
+  schedule:
+    # Runs at 04:00, 10:00, 16:00, 22:00 UTC
+    - cron: '0 4,10,16,22 * * *'
+  workflow_dispatch: # Allows you to trigger it manually anytime from GitHub
+
+jobs:
+  run-monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake Up Render Container
+        run: |
+          echo "Sending wake-up ping to Render..."
+          curl -s --max-time 30 https://cloud-rights-monitor.onrender.com/ || true
+
+      - name: Wait for Container Boot
+        run: sleep 20
+
+      - name: Execute Monitor Pipeline
+        run: |
+          echo "Triggering /run-monitor pipeline..."
+          response=$(curl -s --max-time 30 https://cloud-rights-monitor.onrender.com/run-monitor)
+          echo "Response from server: $response"
