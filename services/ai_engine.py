@@ -3,51 +3,44 @@ import google.generativeai as genai
 from config import GEMINI_API_KEY
 
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+    except Exception as e:
+        print(f"[!] Gemini config warning: {e}")
 
-# Permanent Master Hashtags added to every post
 MASTER_HASHTAGS = ["#HumanRights", "#HumanDignity", "#JusticeNow", "#RightsWatch"]
 
 def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list) -> tuple:
-    """Generates platform-tailored posts with a human POV and structured hashtags."""
+    """Generates platform-tailored posts with human POV and master hashtags."""
     if not GEMINI_API_KEY:
         return None, "Gemini API Key missing"
 
-    model = genai.GenerativeModel('gemini-1.5-flash')
-
-    prompt = f"""
-    You are an empathetic human rights journalist writing for an international monitoring network.
-    Analyze this report:
-    - Headline: {title}
-    - Summary: {snippet}
-    - Source: {link}
-
-    Instructions:
-    1. Human POV Angle: Emphasize the real human cost, affected individuals, rights violated, and civic impact—avoid dry robotic news summaries.
-    2. Dynamic Hashtags: Generate 3 to 4 specific topic hashtags relevant ONLY to this country/issue (e.g., #SudanCrisis, #PressFreedom, #WomenRights).
-    3. Generate TWO versions formatted strictly as JSON:
-
-    {{
-      "threads_draft": "Post text under 450 characters including source link, human POV summary, and max 4 hashtags total.",
-      "long_draft": "Richer detailed narrative (2-3 paragraphs) highlighting the human perspective, key report findings, source link, and full hashtag block."
-    }}
-
-    Rules:
-    - Header must start with: [CW: Human Rights Report]
-    - Do NOT include markdown code fences in response. Output ONLY valid raw JSON.
-    """
-
     try:
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        prompt = f"""
+        You are an empathetic human rights journalist writing for an international monitoring network.
+        Analyze this report:
+        - Headline: {title}
+        - Summary: {snippet}
+        - Source: {link}
+
+        Instructions:
+        1. Emphasize the human cost, civil rights violated, and impact on real people.
+        2. Generate 3 to 4 specific topic hashtags relevant to this report.
+        3. Output ONLY raw valid JSON (no markdown formatting or code blocks) using this schema:
+        {{
+          "threads_draft": "Concise post under 420 chars including source link and key human impact.",
+          "long_draft": "Expanded multi-paragraph writeup with detailed narrative, human impact, key facts, and link."
+        }}
+        """
+
         response = model.generate_content(prompt)
-        clean_json = response.text.replace('```json', '').replace('```', '').strip()
-        data = json.loads(clean_json)
+        clean_text = response.text.replace('```json', '').replace('```', '').strip()
+        data = json.loads(clean_text)
 
-        # Merge dynamic topic hashtags with Master Hashtags
-        topic_tags = " ".join(MASTER_HASHTAGS)
-
-        # Final formatting
-        threads_post = f"{data['threads_draft']}\n\n{topic_tags}"
-        long_post = f"{data['long_draft']}\n\n{topic_tags}"
+        tags_string = " ".join(MASTER_HASHTAGS)
+        threads_post = f"{data.get('threads_draft', '')}\n\n{tags_string}"
+        long_post = f"{data.get('long_draft', '')}\n\n{tags_string}"
 
         return {
             "threads": threads_post,
@@ -55,5 +48,8 @@ def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list) 
         }, None
 
     except Exception as e:
-        print(f"[!] Gemini generation error: {e}")
-        return None, str(e)
+        print(f"[!] Gemini draft generation error: {e}")
+        # Fallback draft if AI formatting fails
+        fallback_tags = " ".join(MASTER_HASHTAGS)
+        fallback = f"[CW: Human Rights Report]\n\n{title}\n\nSource: {link}\n\n{fallback_tags}"
+        return {"threads": fallback, "long": fallback}, str(e)
