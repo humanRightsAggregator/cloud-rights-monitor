@@ -1,10 +1,15 @@
 from supabase import create_client, Client
 from config import SUPABASE_URL, SUPABASE_KEY
 
+# Clean strings to strip out hidden linebreaks (\n) or trailing spaces from copy-pasting
+CLEAN_URL = SUPABASE_URL.strip() if SUPABASE_URL else ""
+CLEAN_KEY = SUPABASE_KEY.replace('\n', '').replace('\r', '').replace(' ', '').strip() if SUPABASE_KEY else ""
+
 supabase: Client = None
-if SUPABASE_URL and SUPABASE_KEY:
+
+if CLEAN_URL and CLEAN_KEY:
     try:
-        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        supabase = create_client(CLEAN_URL, CLEAN_KEY)
     except Exception as e:
         print(f"[!] Supabase initialization error: {e}")
 
@@ -18,7 +23,6 @@ def check_article_exists(url: str) -> bool:
         return len(res.data) > 0
     except Exception as e:
         print(f"[!] Supabase Select Error: {e}")
-        # SAFEGUARD: Return True on error so offline DB never triggers duplicate posts
         return True
 
 def save_article_draft(url: str, headline: str, draft: str, status: str = "published"):
