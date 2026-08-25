@@ -74,3 +74,13 @@ def run_monitor(background_tasks: BackgroundTasks):
         "message": "Monitor task launched in background",
         "timestamp": time.time()
     }
+
+# Inside process_feeds_task() in app.py
+
+                    processed_count += 1
+                    recent_topics.insert(0, {"headline": title, "draft_text": long_text})
+
+                # Pause 15 seconds between posts to keep Facebook API under anti-spam limits
+                time.sleep(15)
+        except Exception as e:
+            print(f"[!] Feed processing exception: {e}")
