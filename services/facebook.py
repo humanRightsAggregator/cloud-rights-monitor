@@ -1,52 +1,57 @@
 import requests
 from config import FB_PAGE_ID, FB_PAGE_ACCESS_TOKEN
 
-def post_to_facebook(text: str, link: str = None, image_url: str = None) -> bool:
-    """Publishes a photo post or text/link post to the Facebook Page."""
+def post_to_facebook(message: str, link: str = None, image_url: str = None) -> bool:
+    """
+    Posts to Facebook Page with automatic multi-stage fallback:
+    1. Attempts Photo Upload (/photos).
+    2. If Photo fails, falls back to Link Feed post (/feed).
+    3. If Link fails, falls back to Text Feed post (/feed).
+    """
     if not FB_PAGE_ID or not FB_PAGE_ACCESS_TOKEN:
-        print("[!] Facebook credentials missing.")
+        print("[!] Facebook credentials missing (FB_PAGE_ID or FB_PAGE_ACCESS_TOKEN).")
         return False
 
-    try:
-        # If an article image exists, post as a Photo
-        if image_url:
-            url = f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/photos"
-            message = text
-            if link and link not in text:
-                message += f"\n\n🔗 Read full report: {link}"
-
+    # Attempt 1: Photo Post
+    if image_url:
+        try:
+            photo_endpoint = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/photos"
             payload = {
                 "url": image_url,
                 "caption": message,
                 "access_token": FB_PAGE_ACCESS_TOKEN
             }
-            # Increased timeout to 30s to allow Meta to download larger images
-            res = requests.post(url, data=payload, timeout=30)
-            data = res.json()
-            if "id" in data:
-                print(f"[+] Published Photo to Facebook Page: {data['id']}")
+            res = requests.post(photo_endpoint, data=payload, timeout=15)
+            res_data = res.json()
+
+            if "id" in res_data:
+                print(f"[+] Published Photo to Facebook Page: {res_data['id']}")
                 return True
             else:
-                print(f"[!] Facebook Photo Error (falling back to feed): {data}")
+                print(f"[!] FB Photo Upload rejected: {res_data}. Trying feed post...")
+        except Exception as e:
+            print(f"[!] FB Photo Exception: {e}. Trying feed post...")
 
-        # Fallback to Feed post
-        url = f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/feed"
+    # Attempt 2: Link Feed Post (Fallback)
+    try:
+        feed_endpoint = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/feed"
         payload = {
-            "message": text,
+            "message": message,
             "access_token": FB_PAGE_ACCESS_TOKEN
         }
         if link:
             payload["link"] = link
 
-        res = requests.post(url, data=payload, timeout=30)
-        data = res.json()
-        if "id" in data:
-            print(f"[+] Published Feed to Facebook Page: {data['id']}")
+        res = requests.post(feed_endpoint, data=payload, timeout=15)
+        res_data = res.json()
+
+        if "id" in res_data:
+            print(f"[+] Published Feed Post to Facebook Page: {res_data['id']}")
             return True
         else:
-            print(f"[!] Facebook Feed Error: {data}")
+            print(f"[!] FB Feed Post Error: {res_data}")
             return False
 
     except Exception as e:
-        print(f"[!] Facebook API Exception: {e}")
+        print(f"[!] FB Feed Post Exception: {e}")
         return False
