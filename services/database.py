@@ -7,6 +7,16 @@ CLEAN_KEY = SUPABASE_KEY.replace('\n', '').replace('\r', '').replace(' ', '').st
 
 supabase: Client = None
 
+# Print exact diagnostic details during server startup
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        supabase = create_client(SUPABASE_URL.strip(), SUPABASE_KEY.strip())
+        print("[+] Supabase client successfully initialized.")
+    except Exception as e:
+        print(f"[!] EXPLICIT SUPABASE INIT ERROR: {type(e).__name__} - {e}")
+else:
+    print(f"[!] Config Check -> URL Present: {bool(SUPABASE_URL)}, Key Present: {bool(SUPABASE_KEY)}")
+
 if CLEAN_URL and CLEAN_KEY:
     try:
         supabase = create_client(CLEAN_URL, CLEAN_KEY)
