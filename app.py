@@ -15,7 +15,7 @@ from services.instagram import post_to_instagram
 app = FastAPI()
 
 def process_feeds_task():
-    """Background worker processing feeds, generating tailored AI drafts, and posting."""
+    """Background worker processing RSS feeds and handling multi-platform posting."""
     print("[*] Starting background feed monitor run...")
     recent_topics = get_recent_articles(limit=15)
     processed_count = 0
@@ -31,17 +31,13 @@ def process_feeds_task():
                 if not link or check_article_exists(link):
                     continue
 
-                # 1. Extract image via RSS, Scraper, or Microlink API
                 article_image = extract_article_image(entry, link)
-
-                # 2. Generate Human-POV AI drafts with Master & Dynamic Hashtags
                 drafts, err = generate_ai_draft(title, snippet, link, recent_topics)
 
                 if drafts and isinstance(drafts, dict):
                     threads_text = drafts.get("threads", "")
                     long_text = drafts.get("long", "")
 
-                    # 3. Synchronous broadcasting tailored by platform limits
                     threads_ok = post_to_threads(threads_text, article_image)
                     fb_ok = post_to_facebook(long_text, link, article_image)
                     ig_ok = post_to_instagram(long_text, article_image)
@@ -52,10 +48,7 @@ def process_feeds_task():
                         "Instagram": ig_ok
                     }
 
-                    # 4. Save record to database
                     save_article_draft(link, title, long_text, "published")
-
-                    # 5. Send Telegram notification report
                     send_telegram_notification(long_text, title, platform_results)
 
                     processed_count += 1
@@ -69,12 +62,12 @@ def process_feeds_task():
 
 @app.api_route("/", methods=["GET", "HEAD"])
 def health_check():
-    """Lightweight endpoint for cron wake-up ping."""
+    """Lightweight health check endpoint for uptime monitoring."""
     return {"status": "System Online", "service": "Global Human Rights Monitor"}
 
 @app.api_route("/run-monitor", methods=["GET", "HEAD"])
 def run_monitor(background_tasks: BackgroundTasks):
-    """Responds instantly to prevent network timeouts, running execution in background."""
+    """Responds immediately to avoid HTTP timeouts, delegating processing to a background task."""
     background_tasks.add_task(process_feeds_task)
     return {
         "status": "Accepted",
