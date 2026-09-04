@@ -15,7 +15,7 @@ from services.instagram import post_to_instagram
 app = FastAPI()
 
 def process_feeds_task():
-    """Background worker executing platform-tailored publishing with error tracking."""
+    """Background worker executing platform-tailored publishing with strict deduplication."""
     print("[*] Starting background feed monitor run...")
     run_errors = []
     processed_count = 0
@@ -30,12 +30,13 @@ def process_feeds_task():
         try:
             feed = feedparser.parse(feed_url)
             for entry in feed.entries[:2]:
-                title = entry.get('title', 'Unknown Title')
+                title = entry.get('title', 'Unknown Title').strip()
                 try:
-                    link = entry.get('link', '')
+                    link = entry.get('link', '').strip()
                     snippet = entry.get('summary', '') or entry.get('description', '')
 
-                    if not link or check_article_exists(link):
+                    # Dual check: passes both URL and Title to prevent duplicates
+                    if not link or check_article_exists(link, title):
                         continue
 
                     article_image = extract_article_image(entry, link)
@@ -49,6 +50,9 @@ def process_feeds_task():
                         fb_text = drafts.get("facebook", "")
                         ig_text = drafts.get("instagram", "")
 
+                        # IMMEDIATELY lock in Supabase BEFORE posting to prevent duplicates on crash/retry
+                        save_article_draft(link, title, fb_text, "processing")
+
                         # Platform-specific posting calls
                         threads_ok = post_to_threads(threads_text, article_image)
                         fb_ok = post_to_facebook(fb_text, link, article_image)
@@ -60,12 +64,9 @@ def process_feeds_task():
                             "Instagram": ig_ok
                         }
 
-                        # Check if any platforms failed
                         if not all([threads_ok, fb_ok, ig_ok]):
-                            run_errors.append(f"Platform publish failed for '{title[:25]}'. Check logs.")
+                            run_errors.append(f"Platform publish partial fail for '{title[:25]}'.")
 
-                        # Save version to database history
-                        save_article_draft(link, title, fb_text, "published")
                         send_telegram_notification(fb_text, title, platform_results)
 
                         processed_count += 1
@@ -78,7 +79,6 @@ def process_feeds_task():
         except Exception as e:
             run_errors.append(f"Feed parsing error for ({feed_url}): {e}")
 
-    # Send final summary report to Telegram regardless of new posts
     send_run_summary(processed_count, run_errors)
     print(f"[+] Background monitor run complete. Items published: {processed_count}")
 
