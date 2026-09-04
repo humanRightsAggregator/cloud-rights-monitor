@@ -8,16 +8,20 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+# Threads Credentials
 THREADS_USER_ID = os.getenv("THREADS_USER_ID")
 THREADS_ACCESS_TOKEN = os.getenv("THREADS_ACCESS_TOKEN")
 META_ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN") or os.getenv("THREADS_ACCESS_TOKEN")
 
+# Facebook Credentials
 FB_PAGE_ID = os.getenv("FB_PAGE_ID")
 FB_PAGE_ACCESS_TOKEN = os.getenv("FB_PAGE_ACCESS_TOKEN")
 
-IG_USER_ID = os.getenv("IG_USER_ID")
+# Instagram Credentials (aliases both variable names)
+IG_USER_ID = os.getenv("IG_USER_ID") or os.getenv("INSTAGRAM_ACCOUNT_ID")
+INSTAGRAM_ACCOUNT_ID = IG_USER_ID
 
-# Master List of Genuine Global Human Rights RSS Feeds
+# Master List of Global Human Rights RSS Feeds
 RSS_FEEDS = [
     # Global Watchdogs
     "https://www.amnesty.org/en/rss/",
