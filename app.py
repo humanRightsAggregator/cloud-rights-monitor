@@ -15,7 +15,7 @@ from services.instagram import post_to_instagram
 app = FastAPI()
 
 def process_feeds_task():
-    """Background worker processing RSS feeds and handling multi-platform posting."""
+    """Background worker executing platform-tailored publishing with anti-spam delays."""
     print("[*] Starting background feed monitor run...")
     recent_topics = get_recent_articles(limit=15)
     processed_count = 0
@@ -36,11 +36,13 @@ def process_feeds_task():
 
                 if drafts and isinstance(drafts, dict):
                     threads_text = drafts.get("threads", "")
-                    long_text = drafts.get("long", "")
+                    fb_text = drafts.get("facebook", "")
+                    ig_text = drafts.get("instagram", "")
 
+                    # Platform-specific posting calls
                     threads_ok = post_to_threads(threads_text, article_image)
-                    fb_ok = post_to_facebook(long_text, link, article_image)
-                    ig_ok = post_to_instagram(long_text, article_image)
+                    fb_ok = post_to_facebook(fb_text, link, article_image)
+                    ig_ok = post_to_instagram(ig_text, article_image)
 
                     platform_results = {
                         "Threads": threads_ok,
@@ -48,13 +50,14 @@ def process_feeds_task():
                         "Instagram": ig_ok
                     }
 
-                    save_article_draft(link, title, long_text, "published")
-                    send_telegram_notification(long_text, title, platform_results)
+                    # Save Facebook/Detailed version to database history
+                    save_article_draft(link, title, fb_text, "published")
+                    send_telegram_notification(fb_text, title, platform_results)
 
                     processed_count += 1
-                    recent_topics.insert(0, {"headline": title, "draft_text": long_text})
+                    recent_topics.insert(0, {"headline": title, "draft_text": fb_text})
 
-                # 15-second delay between items to avoid Meta anti-spam rate limits
+                # 15-second delay between posts to comply with Meta anti-spam policies
                 time.sleep(15)
         except Exception as e:
             print(f"[!] Feed processing exception: {e}")
@@ -63,12 +66,12 @@ def process_feeds_task():
 
 @app.api_route("/", methods=["GET", "HEAD"])
 def health_check():
-    """Lightweight health check endpoint for uptime monitoring."""
+    """Lightweight health check endpoint."""
     return {"status": "System Online", "service": "Global Human Rights Monitor"}
 
 @app.api_route("/run-monitor", methods=["GET", "HEAD"])
 def run_monitor(background_tasks: BackgroundTasks):
-    """Responds immediately to avoid HTTP timeouts, delegating processing to a background task."""
+    """Background execution trigger endpoint."""
     background_tasks.add_task(process_feeds_task)
     return {
         "status": "Accepted",
