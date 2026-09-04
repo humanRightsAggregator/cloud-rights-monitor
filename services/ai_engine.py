@@ -11,12 +11,11 @@ if GEMINI_API_KEY:
 MASTER_HASHTAGS = ["#HumanRights", "#HumanDignity", "#JusticeNow", "#RightsWatch"]
 
 def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list) -> tuple:
-    """Generates three tailored posts (Threads, Facebook, Instagram) adhering to platform rules."""
     tags_string = " ".join(MASTER_HASHTAGS)
 
-    # Emergency fallbacks if AI processing fails
-    fallback_threads = f"[CW: Human Rights Report]\n\n{title}\n\n{snippet[:200]}...\n\nSource: {link}\n\n#HumanRights"
-    fallback_long = f"[CW: Human Rights Report]\n\n{title}\n\n{snippet}\n\nSource: {link}\n\n{tags_string}"
+    # Emergency fallbacks without the [CW:] tag
+    fallback_threads = f"{title}\n\n{snippet[:200]}...\n\nSource: {link}\n\n#HumanRights"
+    fallback_long = f"{title}\n\n{snippet}\n\nSource: {link}\n\n{tags_string}"
 
     if not GEMINI_API_KEY:
         return {
@@ -46,6 +45,7 @@ def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list) 
     CORE WRITING RULES:
     1. Human POV: Lead with the human impact—who is affected, civil liberty violations, suffering, or community resilience. Avoid dry policy tone.
     2. Detailed Description: Provide deep, multi-angle context explaining what happened, watchdog findings, and accountability demands.
+    3. DO NOT use content warnings like "[CW: Human Rights Report]". Start directly with the text/headline.
 
     PLATFORM SPECIFIC REQUIREMENTS:
     - Threads: Punchy human hook + concise summary + link + max 2 hashtags. STRICTLY under 400 total characters.
