@@ -1,22 +1,35 @@
 import os
 
-# Cloud Environment Variables
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+# API Credentials
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-# Meta APIs (Fallback META_ACCESS_TOKEN to FB_PAGE_ACCESS_TOKEN if omitted)
-FB_PAGE_ACCESS_TOKEN = os.environ.get("FB_PAGE_ACCESS_TOKEN", "")
-META_ACCESS_TOKEN = os.environ.get("META_ACCESS_TOKEN", FB_PAGE_ACCESS_TOKEN)
-THREADS_USER_ID = os.environ.get("THREADS_USER_ID", "")
-FB_PAGE_ID = os.environ.get("FB_PAGE_ID", "")
-INSTAGRAM_ACCOUNT_ID = os.environ.get("INSTAGRAM_ACCOUNT_ID", "")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# News Feed Sources
+THREADS_USER_ID = os.getenv("THREADS_USER_ID")
+THREADS_ACCESS_TOKEN = os.getenv("THREADS_ACCESS_TOKEN")
+
+FB_PAGE_ID = os.getenv("FB_PAGE_ID")
+FB_PAGE_ACCESS_TOKEN = os.getenv("FB_PAGE_ACCESS_TOKEN")
+
+IG_USER_ID = os.getenv("IG_USER_ID")
+
+# Master List of Genuine Global Human Rights RSS Feeds
 RSS_FEEDS = [
+    # Global Watchdogs
     "https://www.amnesty.org/en/rss/",
     "https://www.hrw.org/rss/news",
-    "https://www.ohchr.org/en/rss.xml"
+    # UN Agencies
+    "https://www.ohchr.org/en/rss.xml",
+    "https://www.unhcr.org/news/rss.xml",
+    # Press Freedom
+    "https://cpj.org/feed/",
+    "https://rsf.org/en/rss.xml",
+    # Crisis & Humanitarian
+    "https://www.crisisgroup.org/rss",
+    "https://reliefweb.int/updates/rss.xml",
+    # Corporate & Environmental Rights
+    "https://www.globalwitness.org/en/rss.xml"
 ]
