@@ -13,7 +13,6 @@ MASTER_HASHTAGS = ["#HumanRights", "#HumanDignity", "#JusticeNow", "#RightsWatch
 def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list) -> tuple:
     tags_string = " ".join(MASTER_HASHTAGS)
 
-    # Emergency fallbacks without the [CW:] tag
     fallback_threads = f"{title}\n\n{snippet[:200]}...\n\nSource: {link}\n\n#HumanRights"
     fallback_long = f"{title}\n\n{snippet}\n\nSource: {link}\n\n{tags_string}"
 
@@ -23,17 +22,6 @@ def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list) 
             "facebook": fallback_long,
             "instagram": fallback_long
         }, "No API Key"
-
-    model = None
-    for model_name in ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']:
-        try:
-            model = genai.GenerativeModel(model_name)
-            break
-        except Exception:
-            continue
-
-    if not model:
-        model = genai.GenerativeModel('gemini-2.5-flash')
 
     prompt = f"""
     You are an expert human rights journalist and social media growth strategist.
@@ -54,7 +42,7 @@ def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list) 
         - Para 2: In-depth watchdog findings & systemic context.
         - Para 3: Call for justice & international accountability.
         - Include full link and master hashtags.
-    - Instagram: Deep narrative similar to Facebook, but formatted with clean line breaks, tasteful emojis for readability, non-clickable link notice ("🔗 Source Link: [URL]"), and hashtag block.
+    - Instagram: Deep narrative similar to Facebook, formatted with clean line breaks, tasteful emojis, non-clickable link notice ("🔗 Source Link: [URL]"), and hashtag block.
 
     Output STRICTLY raw valid JSON without markdown code blocks:
     {{
@@ -64,21 +52,29 @@ def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list) 
     }}
     """
 
-    try:
-        response = model.generate_content(prompt)
-        clean_text = response.text.replace('```json', '').replace('```', '').strip()
-        data = json.loads(clean_text)
+    # Active production model candidates
+    model_candidates = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro']
+    last_error = None
 
-        return {
-            "threads": data.get("threads", fallback_threads),
-            "facebook": data.get("facebook", fallback_long),
-            "instagram": data.get("instagram", fallback_long)
-        }, None
+    for model_name in model_candidates:
+        try:
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt)
+            clean_text = response.text.replace('```json', '').replace('```', '').strip()
+            data = json.loads(clean_text)
 
-    except Exception as e:
-        print(f"[!] Gemini generation error: {e}")
-        return {
-            "threads": fallback_threads,
-            "facebook": fallback_long,
-            "instagram": fallback_long
-        }, str(e)
+            return {
+                "threads": data.get("threads", fallback_threads),
+                "facebook": data.get("facebook", fallback_long),
+                "instagram": data.get("instagram", fallback_long)
+            }, None
+        except Exception as e:
+            last_error = str(e)
+            continue
+
+    print(f"[!] Gemini generation error: {last_error}")
+    return {
+        "threads": fallback_threads,
+        "facebook": fallback_long,
+        "instagram": fallback_long
+    }, last_error
