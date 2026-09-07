@@ -52,8 +52,8 @@ def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list) 
     }}
     """
 
-    # Active production model candidates
-    model_candidates = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro']
+    # Fully supported Gemini model strings
+    model_candidates = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
     last_error = None
 
     for model_name in model_candidates:
