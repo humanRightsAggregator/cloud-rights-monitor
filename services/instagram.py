@@ -1,85 +1,68 @@
 import requests
-import time
-import random
-from urllib.parse import quote
-from config import INSTAGRAM_ACCOUNT_ID, FB_PAGE_ACCESS_TOKEN
-
-DEFAULT_IG_IMAGE = "https://images.unsplash.com/photo-1589829545856-d10d557cf95f?w=1080&q=80"
+from config import IG_USER_ID, FB_PAGE_ACCESS_TOKEN
 
 def post_to_instagram(caption: str, image_url: str = None) -> bool:
-    """Posts an image card and caption to Instagram using wsrv.nl proxy."""
-    if not INSTAGRAM_ACCOUNT_ID or not FB_PAGE_ACCESS_TOKEN:
-        print("[!] Instagram credentials missing.")
+    """Publishes a regular feed post to Instagram."""
+    if not IG_USER_ID or not FB_PAGE_ACCESS_TOKEN or not image_url:
+        print("[!] Instagram credentials or image missing.")
         return False
 
-    if image_url:
-        encoded_url = quote(image_url, safe='')
-        processed_url = f"https://wsrv.nl/?url={encoded_url}&w=1080&h=1080&fit=cover&output=jpg"
-        print(f"[*] Posting Article Image to IG: {processed_url}")
-    else:
-        rand_id = random.randint(1, 100000)
-        processed_url = f"{DEFAULT_IG_IMAGE}&rand={rand_id}"
-        print("[!] No article image provided. Falling back to Lady Justice image.")
+    try:
+        container_endpoint = f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media"
+        payload = {
+            "image_url": image_url,
+            "caption": caption,
+            "access_token": FB_PAGE_ACCESS_TOKEN
+        }
+        res = requests.post(container_endpoint, data=payload, timeout=15)
+        res_data = res.json()
+
+        if "id" not in res_data:
+            print(f"[!] IG Feed Container Error: {res_data}")
+            return False
+
+        publish_endpoint = f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish"
+        pub_res = requests.post(publish_endpoint, data={
+            "creation_id": res_data["id"],
+            "access_token": FB_PAGE_ACCESS_TOKEN
+        }, timeout=15)
+        
+        return "id" in pub_res.json()
+    except Exception as e:
+        print(f"[!] Instagram Feed Exception: {e}")
+        return False
+
+
+def post_story_to_instagram(image_url: str) -> bool:
+    """Publishes a 9:16 vertical image directly to Instagram Stories."""
+    if not IG_USER_ID or not FB_PAGE_ACCESS_TOKEN or not image_url:
+        return False
 
     try:
-        # Step 1: Create Container
-        container_endpoint = f"https://graph.facebook.com/v20.0/{INSTAGRAM_ACCOUNT_ID}/media"
-        c_payload = {
-            "image_url": processed_url,
-            "caption": caption[:2200],
+        # Step 1: Create Story Container (media_type="STORIES")
+        container_endpoint = f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media"
+        payload = {
+            "image_url": image_url,
+            "media_type": "STORIES",
             "access_token": FB_PAGE_ACCESS_TOKEN
         }
-        c_res = requests.post(container_endpoint, data=c_payload, timeout=20).json()
-        container_id = c_res.get("id")
+        res = requests.post(container_endpoint, data=payload, timeout=15).json()
 
-        if not container_id:
-            print(f"[!] Instagram Container Error: {c_res}")
-            if image_url:
-                print("[*] Article image failed on IG container creation. Retrying with default...")
-                return post_to_instagram(caption, image_url=None)
+        if "id" not in res:
+            print(f"[!] IG Story Container Error: {res}")
             return False
 
-        # Step 2: Poll Status
-        status_url = f"https://graph.facebook.com/v20.0/{container_id}"
-        status_payload = {
-            "fields": "status_code,status",
+        # Step 2: Publish Story
+        publish_endpoint = f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish"
+        pub_res = requests.post(publish_endpoint, data={
+            "creation_id": res["id"],
             "access_token": FB_PAGE_ACCESS_TOKEN
-        }
+        }, timeout=15).json()
 
-        ready = False
-        for _ in range(10):
-            time.sleep(2)
-            s_res = requests.get(status_url, params=status_payload, timeout=10).json()
-            status_code = s_res.get("status_code")
-
-            if status_code == "FINISHED":
-                ready = True
-                break
-            elif status_code == "ERROR":
-                print(f"[!] Instagram Container Processing Error: {s_res}")
-                break
-
-        if not ready:
-            print("[!] Instagram container processing timed out.")
-            if image_url:
-                return post_to_instagram(caption, image_url=None)
-            return False
-
-        # Step 3: Publish Container
-        publish_endpoint = f"https://graph.facebook.com/v20.0/{INSTAGRAM_ACCOUNT_ID}/media_publish"
-        p_payload = {
-            "creation_id": container_id,
-            "access_token": FB_PAGE_ACCESS_TOKEN
-        }
-        p_res = requests.post(publish_endpoint, data=p_payload, timeout=20).json()
-
-        if "id" in p_res:
-            print(f"[+] Published to Instagram: {p_res['id']}")
+        if "id" in pub_res:
+            print(f"[+] Published Instagram Story: {pub_res['id']}")
             return True
-        else:
-            print(f"[!] Instagram Publish Error: {p_res}")
-            return False
-
+        return False
     except Exception as e:
-        print(f"[!] Instagram API Exception: {e}")
+        print(f"[!] IG Story Exception: {e}")
         return False

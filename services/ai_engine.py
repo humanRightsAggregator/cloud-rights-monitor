@@ -10,26 +10,25 @@ if GEMINI_API_KEY:
 
 MASTER_HASHTAGS = ["#HumanRights", "#HumanDignity", "#JusticeNow", "#RightsWatch"]
 
-def get_available_model():
-    """Dynamically retrieves an active, supported Gemini model for this API key."""
+def get_active_model():
+    """Dynamically locates an active, supported Gemini model for this API key."""
     try:
         for m in genai.list_models():
             if 'generateContent' in m.supported_generation_methods:
-                model_id = m.name.replace('models/', '')
-                # Prioritize Flash models
-                if 'flash' in model_id:
-                    return genai.GenerativeModel(model_id)
+                model_name = m.name.replace('models/', '')
+                if 'flash' in model_name:
+                    return genai.GenerativeModel(model_name)
     except Exception as e:
         print(f"[!] Dynamic model lookup notice: {e}")
 
     # Active production fallbacks
-    for candidate in ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.5-flash-lite']:
+    for candidate in ['gemini-2.0-flash', 'gemini-1.5-flash-latest']:
         try:
             return genai.GenerativeModel(candidate)
         except Exception:
             continue
 
-    return genai.GenerativeModel('gemini-2.5-flash')
+    return genai.GenerativeModel('gemini-2.0-flash')
 
 def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list) -> tuple:
     tags_string = " ".join(MASTER_HASHTAGS)
@@ -52,18 +51,14 @@ def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list) 
     - Link: {link}
 
     CORE WRITING RULES:
-    1. Human POV: Lead with the human impact—who is affected, civil liberty violations, suffering, or community resilience. Avoid dry policy tone.
-    2. Detailed Description: Provide deep, multi-angle context explaining what happened, watchdog findings, and accountability demands.
-    3. DO NOT use content warnings like "[CW: Human Rights Report]". Start directly with the text/headline.
+    1. Human POV: Lead with the human impact—who is affected, civil liberty violations, suffering, or community resilience.
+    2. Detailed Description: Provide deep, multi-angle context explaining watchdog findings and accountability demands.
+    3. DO NOT use content warnings. Start directly with the text/headline.
 
     PLATFORM SPECIFIC REQUIREMENTS:
     - Threads: Punchy human hook + concise summary + link + max 2 hashtags. STRICTLY under 400 total characters.
-    - Facebook: Deep-dive 3-paragraph narrative. 
-        - Para 1: Human-POV hook & immediate civilian impact.
-        - Para 2: In-depth watchdog findings & systemic context.
-        - Para 3: Call for justice & international accountability.
-        - Include full link and master hashtags.
-    - Instagram: Deep narrative similar to Facebook, formatted with clean line breaks, tasteful emojis, non-clickable link notice ("🔗 Source Link: [URL]"), and hashtag block.
+    - Facebook: Deep-dive 3-paragraph narrative (Para 1: Human hook, Para 2: Findings, Para 3: Call for justice). Include link & hashtags.
+    - Instagram: Deep narrative formatted with clean line breaks, emojis, non-clickable link notice ("🔗 Source Link: [URL]"), and hashtags.
 
     Output STRICTLY raw valid JSON without markdown code blocks:
     {{
@@ -74,7 +69,7 @@ def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list) 
     """
 
     try:
-        model = get_available_model()
+        model = get_active_model()
         response = model.generate_content(prompt)
         clean_text = response.text.replace('```json', '').replace('```', '').strip()
         data = json.loads(clean_text)
