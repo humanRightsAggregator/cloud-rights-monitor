@@ -10,6 +10,27 @@ if GEMINI_API_KEY:
 
 MASTER_HASHTAGS = ["#HumanRights", "#HumanDignity", "#JusticeNow", "#RightsWatch"]
 
+def get_available_model():
+    """Dynamically retrieves an active, supported Gemini model for this API key."""
+    try:
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                model_id = m.name.replace('models/', '')
+                # Prioritize Flash models
+                if 'flash' in model_id:
+                    return genai.GenerativeModel(model_id)
+    except Exception as e:
+        print(f"[!] Dynamic model lookup notice: {e}")
+
+    # Active production fallbacks
+    for candidate in ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.5-flash-lite']:
+        try:
+            return genai.GenerativeModel(candidate)
+        except Exception:
+            continue
+
+    return genai.GenerativeModel('gemini-2.5-flash')
+
 def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list) -> tuple:
     tags_string = " ".join(MASTER_HASHTAGS)
 
@@ -52,29 +73,22 @@ def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list) 
     }}
     """
 
-    # Fully supported Gemini model strings
-    model_candidates = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
-    last_error = None
+    try:
+        model = get_available_model()
+        response = model.generate_content(prompt)
+        clean_text = response.text.replace('```json', '').replace('```', '').strip()
+        data = json.loads(clean_text)
 
-    for model_name in model_candidates:
-        try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
-            clean_text = response.text.replace('```json', '').replace('```', '').strip()
-            data = json.loads(clean_text)
+        return {
+            "threads": data.get("threads", fallback_threads),
+            "facebook": data.get("facebook", fallback_long),
+            "instagram": data.get("instagram", fallback_long)
+        }, None
 
-            return {
-                "threads": data.get("threads", fallback_threads),
-                "facebook": data.get("facebook", fallback_long),
-                "instagram": data.get("instagram", fallback_long)
-            }, None
-        except Exception as e:
-            last_error = str(e)
-            continue
-
-    print(f"[!] Gemini generation error: {last_error}")
-    return {
-        "threads": fallback_threads,
-        "facebook": fallback_long,
-        "instagram": fallback_long
-    }, last_error
+    except Exception as e:
+        print(f"[!] Gemini generation error: {e}")
+        return {
+            "threads": fallback_threads,
+            "facebook": fallback_long,
+            "instagram": fallback_long
+        }, str(e)
