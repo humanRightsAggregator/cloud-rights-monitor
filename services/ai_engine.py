@@ -1,4 +1,5 @@
 import json
+import re
 import requests
 import google.generativeai as genai
 from config import GROQ_API_KEY, GEMINI_API_KEY, GEMINI_API_KEY_2
@@ -8,7 +9,7 @@ def get_authorized_models() -> list:
     return [calculate_ai_score_groq, calculate_ai_score_gemini]
 
 def calculate_ai_score_groq(title: str, snippet: str) -> float:
-    """Calculates news urgency score using Groq API."""
+    """Calculates news urgency score using Groq API with robust error handling."""
     if not GROQ_API_KEY:
         raise ValueError("GROQ_API_KEY not configured")
 
@@ -26,9 +27,17 @@ def calculate_ai_score_groq(title: str, snippet: str) -> float:
     }
     
     res = requests.post(url, headers=headers, json=payload, timeout=10)
+    if res.status_code != 200:
+        raise RuntimeError(f"Groq API error {res.status_code}: {res.text}")
+        
     data = res.json()
-    content = data["choices"][0]["message"]["content"].strip()
-    return float(content)
+    if "choices" in data and len(data["choices"]) > 0:
+        content = data["choices"][0]["message"]["content"].strip()
+        match = re.search(r'\d+(\.\d+)?', content)
+        if match:
+            return float(match.group(0))
+            
+    raise RuntimeError(f"Invalid Groq response structure: {data}")
 
 def calculate_ai_score_gemini(title: str, snippet: str) -> float:
     """Calculates news urgency score using Gemini API fallback."""
@@ -42,13 +51,15 @@ def calculate_ai_score_gemini(title: str, snippet: str) -> float:
             genai.configure(api_key=key)
             model = genai.GenerativeModel("gemini-1.5-flash")
             response = model.generate_content(prompt)
-            return float(response.text.strip())
+            match = re.search(r'\d+(\.\d+)?', response.text.strip())
+            if match:
+                return float(match.group(0))
         except Exception:
             continue
     raise RuntimeError("All Gemini keys failed")
 
 def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list = None) -> tuple:
-    """Generates drafts via Groq (Primary, 14,400 RPD) with Gemini Fallback."""
+    """Generates drafts via Groq (Primary) with Gemini Fallback."""
     prompt = f"""You are a human rights journalist crafting engaging social media posts.
 
 Article Title: {title}
@@ -69,7 +80,6 @@ Return ONLY raw JSON in this format:
   "threads": "text..."
 }}"""
 
-    # 1. Try Groq Primary Engine
     if GROQ_API_KEY:
         try:
             url = "https://api.groq.com/openai/v1/chat/completions"
@@ -86,15 +96,13 @@ Return ONLY raw JSON in this format:
             res = requests.post(url, headers=headers, json=payload, timeout=12)
             if res.status_code == 200:
                 data = res.json()
-                content = data["choices"][0]["message"]["content"].strip()
-                drafts = json.loads(content)
-                return drafts, None
-            else:
-                print(f"[!] Groq Primary Engine API Error: {res.text}")
+                if "choices" in data and len(data["choices"]) > 0:
+                    content = data["choices"][0]["message"]["content"].strip()
+                    drafts = json.loads(content)
+                    return drafts, None
         except Exception as e:
             print(f"[!] Groq Primary Engine Failed: {e}. Rotating to Gemini Fallback...")
 
-    # 2. Try Gemini Fallback Engine
     gemini_keys = [k for k in [GEMINI_API_KEY, GEMINI_API_KEY_2] if k]
     for idx, key in enumerate(gemini_keys):
         try:
