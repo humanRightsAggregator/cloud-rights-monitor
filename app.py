@@ -33,7 +33,6 @@ def clean_html(raw_html: str) -> str:
     return re.sub(r'\s+', ' ', clean_text).strip()
 
 def publish_single_article(article_data: dict, recent_topics: list) -> dict:
-    """Internal helper to publish an article across all 5 platforms."""
     title = article_data["title"]
     snippet = article_data["snippet"]
     link = article_data["url"]
@@ -74,7 +73,6 @@ def publish_single_article(article_data: dict, recent_topics: list) -> dict:
     return {}
 
 def ingest_feeds_task():
-    """Stage 1: Ingest RSS, evaluate scores, auto-purge <5.5, fast-track >=9.0, send rich Telegram report."""
     print("[*] Starting feed ingestion and scoring run...")
     recent_topics = get_recent_articles(limit=15)
     run_errors = []
@@ -130,7 +128,6 @@ def ingest_feeds_task():
     print(f"[+] Ingestion complete. Evaluated: {stats['evaluated_count']}")
 
 def publish_queue_task():
-    """Stage 2: Select top-ranked queued reports during audience peak windows, publish, and send rich report."""
     print("[*] Starting scheduled peak-window publication...")
     recent_topics = get_recent_articles(limit=15)
     batch = get_top_prioritized_queue(limit=2)
@@ -155,14 +152,19 @@ def publish_queue_task():
     print(f"[+] Peak publishing complete. Published: {len(published_items)}")
 
 def rescore_task():
-    """Background task to rescore purged or stuck items."""
     res = rescore_discarded_or_pending_articles()
+    
+    error_details = ""
+    if res["errors"]:
+        error_lines = "\n".join([f"• {e}" for e in res["errors"][:3]])
+        error_details = f"\n\n⚠️ *Sample Errors:*\n{error_lines}"
+
     msg = (
         f"🔄 *RE-SCORE RECOVERY RUN COMPLETE*\n\n"
         f"• Articles Rescored: {res['rescored_total']}\n"
         f"• Rescued to Queue (>=5.5): {res['newly_queued']}\n"
         f"• Fast-Tracked (>=9.0): {res['fast_tracked']}\n"
-        f"• Errors: {len(res['errors'])}"
+        f"• Failed/Errors: {len(res['errors'])}{error_details}"
     )
     send_telegram_message(msg)
 
