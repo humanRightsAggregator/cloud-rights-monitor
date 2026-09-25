@@ -8,7 +8,7 @@ if GEMINI_API_KEY:
     except Exception as e:
         print(f"[!] Gemini config warning: {e}")
 
-MASTER_HASHTAGS = ["#HumanRights", "#HumanDignity", "#JusticeNow", "#RightsWatch"]
+MASTER_HASHTAGS = ["#HumanRights", "#HumanDignity", "#JusticeNow"]
 
 def get_active_model():
     """Dynamically locates an active, supported Gemini model for this API key."""
@@ -21,7 +21,6 @@ def get_active_model():
     except Exception as e:
         print(f"[!] Dynamic model lookup notice: {e}")
 
-    # Active production fallbacks
     for candidate in ['gemini-2.0-flash', 'gemini-1.5-flash-latest']:
         try:
             return genai.GenerativeModel(candidate)
@@ -31,10 +30,8 @@ def get_active_model():
     return genai.GenerativeModel('gemini-2.0-flash')
 
 def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list) -> tuple:
-    tags_string = " ".join(MASTER_HASHTAGS)
-
     fallback_threads = f"{title}\n\n{snippet[:200]}...\n\nSource: {link}\n\n#HumanRights"
-    fallback_long = f"{title}\n\n{snippet}\n\nSource: {link}\n\n{tags_string}"
+    fallback_long = f"{title}\n\n{snippet}\n\nSource: {link}\n\n#HumanRights #HumanDignity #JusticeNow"
 
     if not GEMINI_API_KEY:
         return {
@@ -53,12 +50,15 @@ def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list) 
     CORE WRITING RULES:
     1. Human POV: Lead with the human impact—who is affected, civil liberty violations, suffering, or community resilience.
     2. Detailed Description: Provide deep, multi-angle context explaining watchdog findings and accountability demands.
-    3. DO NOT use content warnings. Start directly with the text/headline.
+    3. DYNAMIC HASHTAG EXTRACTION: Analyze the story context and extract specific entity hashtags based on:
+       - Locations/Countries (e.g., #Austria, #Israel, #Palestine, #Sudan, #Haiti)
+       - Key Entities/Organizations (e.g., #UEFA, #AmnestyInternational, #UN, #CPJ, #UNHCR)
+       - Specific Human Rights Themes (e.g., #FreePress, #RefugeeRights, #ProtestRights, #EndGenocide)
 
-    PLATFORM SPECIFIC REQUIREMENTS:
-    - Threads: Punchy human hook + concise summary + link + max 2 hashtags. STRICTLY under 400 total characters.
-    - Facebook: Deep-dive 3-paragraph narrative (Para 1: Human hook, Para 2: Findings, Para 3: Call for justice). Include link & hashtags.
-    - Instagram: Deep narrative formatted with clean line breaks, emojis, non-clickable link notice ("🔗 Source Link: [URL]"), and hashtags.
+    PLATFORM HASHTAG & POLICY CONSTRAINTS:
+    - Threads: Max 400 total characters. Clean hook + summary + link + EXACTLY 1-2 hashtags (e.g., #HumanRights + 1 primary topic/country tag).
+    - Facebook: Deep-dive 3-paragraph narrative (Para 1: Human hook, Para 2: Findings, Para 3: Call for justice). End with full link and 3-4 targeted hashtags combining country, key organization, and broad theme.
+    - Instagram: Deep narrative formatted with clean line breaks, tasteful emojis, non-clickable link notice ("🔗 Source Link: [URL]"), and a block of 5-7 targeted hashtags at the very bottom (combining specific story tags + #HumanRights #HumanDignity #JusticeNow).
 
     Output STRICTLY raw valid JSON without markdown code blocks:
     {{
