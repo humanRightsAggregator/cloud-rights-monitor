@@ -39,11 +39,11 @@ def is_semantic_duplicate(new_title: str, threshold: float = 0.65) -> bool:
         print(f"[!] Semantic check error: {e}")
         return False
 
-def save_article_draft(url: str, title: str, draft_text: str, status: str = "draft"):
+def save_article_draft(url: str, title: str, draft_text: str, status: str = "processing"):
     if not supabase:
         return
     try:
-        supabase.table("published_articles").upsert({
+        supabase.table("processed_articles").upsert({
             "url": url,
             "title": title,
             "draft_text": draft_text,
@@ -56,7 +56,7 @@ def get_recent_articles(limit: int = 15) -> list:
     if not supabase:
         return []
     try:
-        res = supabase.table("published_articles").select("title").order("created_at", desc=True).limit(limit).execute()
+        res = supabase.table("processed_articles").select("title").order("created_at", desc=True).limit(limit).execute()
         return [r["title"] for r in res.data] if res.data else []
     except Exception as e:
         print(f"[!] Fetch recent articles error: {e}")
