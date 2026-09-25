@@ -1,95 +1,58 @@
 import json
 import google.generativeai as genai
-from config import GEMINI_API_KEY
+from config import GEMINI_API_KEY, GEMINI_API_KEY_2
 
-if GEMINI_API_KEY:
-    try:
-        genai.configure(api_key=GEMINI_API_KEY)
-    except Exception as e:
-        print(f"[!] Gemini config warning: {e}")
+def _get_model(api_key: str):
+    if not api_key:
+        return None
+    genai.configure(api_key=api_key)
+    return genai.GenerativeModel("gemini-1.5-flash")
 
-MASTER_HASHTAGS = ["#HumanRights", "#HumanDignity", "#JusticeNow"]
+def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list = None) -> tuple:
+    """Generates platform-tailored social media captions using multi-key Gemini failover."""
+    keys = [k for k in [GEMINI_API_KEY, GEMINI_API_KEY_2] if k]
+    if not keys:
+        return None, "No Gemini API keys configured."
 
-def get_authorized_models() -> list:
-    """Queries Google API directly for models authorized and supporting text generation for this API key."""
-    try:
-        valid_models = []
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                m_name = m.name.replace('models/', '')
-                if '2.5' not in m_name:
-                    valid_models.append(m_name)
-        
-        # Prioritize 'flash' models, then remaining supported models
-        flash_models = [m for m in valid_models if 'flash' in m]
-        other_models = [m for m in valid_models if 'flash' not in m]
-        
-        result = flash_models + other_models
-        if result:
-            return result
-    except Exception as e:
-        print(f"[!] Dynamic list_models query error: {e}")
+    prompt = f"""You are a human rights journalist crafting engaging social media posts.
 
-    return ['gemini-1.5-flash']
+Article Title: {title}
+Snippet: {snippet}
+Link: {link}
 
-def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list) -> tuple:
-    fallback_threads = f"{title}\n\n{snippet[:200]}...\n\nSource: {link}\n\n#HumanRights"
-    fallback_long = f"{title}\n\n{snippet}\n\nSource: {link}\n\n#HumanRights #HumanDignity #JusticeNow"
+Generate JSON output with exact keys: "facebook", "instagram", "threads".
 
-    if not GEMINI_API_KEY:
-        return {
-            "threads": fallback_threads,
-            "facebook": fallback_long,
-            "instagram": fallback_long
-        }, "No API Key"
+Rules:
+- "threads": Short, compelling, max 400 characters, no hashtags.
+- "facebook": Concise overview with call to action, max 800 characters.
+- "instagram": Engaging narrative with 3-5 relevant hashtags at the bottom.
 
-    prompt = f"""
-    You are an expert human rights journalist and social media growth strategist.
-    Write multi-platform posts for this report:
-    - Headline: {title}
-    - Report Context: {snippet}
-    - Link: {link}
+Return ONLY raw JSON in this format:
+{{
+  "facebook": "text...",
+  "instagram": "text...",
+  "threads": "text..."
+}}"""
 
-    CORE WRITING RULES:
-    1. Human POV: Lead with the human impact—who is affected, civil liberty violations, suffering, or community resilience.
-    2. Detailed Description: Provide deep, multi-angle context explaining watchdog findings and accountability demands.
-    3. DYNAMIC HASHTAG EXTRACTION: Analyze the story context and extract specific entity hashtags based on:
-       - Locations/Countries (e.g., #Austria, #Israel, #Palestine, #Sudan, #Haiti)
-       - Key Entities/Organizations (e.g., #UEFA, #AmnestyInternational, #UN, #CPJ, #UNHCR)
-       - Specific Human Rights Themes (e.g., #FreePress, #RefugeeRights, #ProtestRights, #EndGenocide)
-
-    PLATFORM HASHTAG & POLICY CONSTRAINTS:
-    - Threads: Max 400 total characters. Clean hook + summary + link + EXACTLY 1-2 hashtags (e.g., #HumanRights + 1 primary topic/country tag).
-    - Facebook: Deep-dive 3-paragraph narrative (Para 1: Human hook, Para 2: Findings, Para 3: Call for justice). End with full link and 3-4 targeted hashtags combining country, key organization, and broad theme.
-    - Instagram: Deep narrative formatted with clean line breaks, tasteful emojis, non-clickable link notice ("🔗 Source Link: [URL]"), and a block of 5-7 targeted hashtags at the very bottom (combining specific story tags + #HumanRights #HumanDignity #JusticeNow).
-
-    Output STRICTLY raw valid JSON without markdown code blocks:
-    {{
-      "threads": "Text for Threads",
-      "facebook": "Text for Facebook",
-      "instagram": "Text for Instagram"
-    }}
-    """
-
-    model_candidates = get_authorized_models()
-    for model_candidate in model_candidates:
+    for idx, key in enumerate(keys):
         try:
-            model = genai.GenerativeModel(model_candidate)
+            model = _get_model(key)
+            if not model:
+                continue
             response = model.generate_content(prompt)
-            clean_text = response.text.replace('```json', '').replace('```', '').strip()
-            data = json.loads(clean_text)
+            clean_text = response.text.strip()
+            if clean_text.startswith("```json"):
+                clean_text = clean_text[7:]
+            if clean_text.endswith("```"):
+                clean_text = clean_text[:-3]
 
-            return {
-                "threads": data.get("threads", fallback_threads),
-                "facebook": data.get("facebook", fallback_long),
-                "instagram": data.get("instagram", fallback_long)
-            }, None
+            drafts = json.loads(clean_text.strip())
+            return drafts, None
         except Exception as e:
-            print(f"[!] Draft generation failed on model '{model_candidate}': {e}")
-            continue
+            print(f"[!] Gemini Key {idx+1} failed: {e}")
+            if "429" in str(e) and idx < len(keys) - 1:
+                print(f"[*] Rotating to Gemini Key {idx+2}...")
+                continue
+            return None, str(e)
 
-    return {
-        "threads": fallback_threads,
-        "facebook": fallback_long,
-        "instagram": fallback_long
-    }, "All dynamically detected draft generation models failed"
+    return None, "All Gemini API keys exhausted or failed."
