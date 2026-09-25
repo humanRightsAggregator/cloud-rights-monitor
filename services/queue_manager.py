@@ -1,5 +1,4 @@
 import json
-import math
 from datetime import datetime, timezone
 import google.generativeai as genai
 from config import GEMINI_API_KEY
@@ -21,10 +20,10 @@ def score_article_with_ai(title: str, snippet: str) -> tuple:
     - Snippet: {snippet}
 
     Assign two numeric scores from 1.0 to 10.0:
-    1. "importance_score": Rate the gravity of human rights impact (10 = active genocide, war crimes, mass civilian displacement, state emergency; 1 = routine organizational statements, minor local announcements).
-    2. "popularity_score": Rate search interest & global trending potential (10 = involves major geopolitical powers like US/UK/UN/Israel, breaking global headlines; 1 = obscure local legal dispute with minimal global interest).
+    1. "importance_score": Rate gravity of human rights impact (10 = active genocide, war crimes, mass displacement; 1 = routine organizational notice).
+    2. "popularity_score": Rate search interest & global trending potential (10 = major geopolitical entities/regions, high search interest; 1 = obscure local legal dispute).
 
-    Output strictly valid JSON with no markdown formatting:
+    Output strictly valid JSON without markdown:
     {{
       "importance_score": 8.5,
       "popularity_score": 7.0
@@ -45,7 +44,6 @@ def score_article_with_ai(title: str, snippet: str) -> tuple:
 
 def process_and_queue_article(title: str, snippet: str, url: str, image_url: str, source_feed: str) -> dict:
     """Scores article, applies 5.5 auto-purge threshold, and queues or fast-tracks it."""
-    # Check if already present in database
     existing = supabase.table("article_queue").select("id").eq("url", url).execute()
     if existing.data:
         return {"action": "ignored", "reason": "already_queued"}
@@ -83,7 +81,8 @@ def process_and_queue_article(title: str, snippet: str, url: str, image_url: str
         "status": status
     }).execute()
 
-    return {"action": status, "score": combined_score, "data": record.data[0] if record.data else {}}
+    record_data = record.data[0] if record.data else {}
+    return {"action": status, "score": combined_score, "data": record_data}
 
 def get_top_prioritized_queue(limit: int = 2) -> list:
     """Retrieves top-ranked queued items applying Time-Decay and Source Diversity constraints."""
@@ -95,18 +94,14 @@ def get_top_prioritized_queue(limit: int = 2) -> list:
 
     now = datetime.now(timezone.utc)
 
-    # Calculate Time-Decay Effective Score
     for item in queued_items:
         created_at = datetime.fromisoformat(item["created_at"].replace("Z", "+00:00"))
         hours_in_queue = (now - created_at).total_seconds() / 3600.0
-        # Formula: Effective Score = Combined Score - (Hours * 0.15)
         effective_score = item["combined_score"] - (hours_in_queue * 0.15)
         item["effective_score"] = effective_score
 
-    # Sort candidates by effective score descending
     queued_items.sort(key=lambda x: x["effective_score"], reverse=True)
 
-    # Enforce Source Diversity Cap (Max 1 article per source per slot)
     selected_batch = []
     used_sources = set()
 
@@ -119,3 +114,11 @@ def get_top_prioritized_queue(limit: int = 2) -> list:
                 break
 
     return selected_batch
+
+def get_queue_status_metrics() -> tuple:
+    """Returns (total_pending_count, next_up_title)."""
+    response = supabase.table("article_queue").select("title, combined_score").eq("status", "queued").order("combined_score", desc=True).execute()
+    data = response.data or []
+    count = len(data)
+    next_title = data[0]["title"] if count > 0 else ""
+    return count, next_title
