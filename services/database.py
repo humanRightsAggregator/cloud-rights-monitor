@@ -1,63 +1,63 @@
+import re
+from difflib import SequenceMatcher
 from supabase import create_client, Client
 from config import SUPABASE_URL, SUPABASE_KEY
 
-CLEAN_URL = SUPABASE_URL.strip() if SUPABASE_URL else ""
-CLEAN_KEY = SUPABASE_KEY.replace('\n', '').replace('\r', '').replace(' ', '').strip() if SUPABASE_KEY else ""
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
-supabase: Client = None
-
-if CLEAN_URL and CLEAN_KEY:
-    try:
-        supabase = create_client(CLEAN_URL, CLEAN_KEY)
-    except Exception as e:
-        print(f"[!] Supabase initialization error: {e}")
-
-def check_article_exists(url: str, headline: str = "") -> bool:
-    """Checks if an article exists by normalized URL OR exact headline."""
+def check_article_exists(url: str, title: str) -> bool:
+    """Checks if the exact URL or exact title already exists in Supabase."""
     if not supabase:
-        print("[!] Supabase client uninitialized. Skipping for safety.")
-        return True
+        return False
     try:
-        clean_url = url.strip().rstrip('/')
-        
-        # 1. Check URL
-        res_url = supabase.table("articles").select("id").eq("url", clean_url).execute()
-        if len(res_url.data) > 0:
-            return True
+        res = supabase.table("article_queue").select("id").or_(f"url.eq.{url},title.eq.{title}").execute()
+        return len(res.data) > 0
+    except Exception as e:
+        print(f"[!] Database check error: {e}")
+        return False
 
-        # 2. Check Headline (secondary safety net)
-        if headline:
-            res_title = supabase.table("articles").select("id").eq("headline", headline.strip()).execute()
-            if len(res_title.data) > 0:
+def is_semantic_duplicate(new_title: str, threshold: float = 0.65) -> bool:
+    """Performs local fuzzy matching against recent articles to prevent duplicate story scoring."""
+    if not supabase or not new_title:
+        return False
+    try:
+        res = supabase.table("article_queue").select("title").order("created_at", desc=True).limit(40).execute()
+        existing_items = res.data or []
+
+        new_clean = re.sub(r'[^a-zA-Z0-9 ]', '', new_title.lower()).strip()
+
+        for item in existing_items:
+            ext_title = item.get("title", "")
+            ext_clean = re.sub(r'[^a-zA-Z0-9 ]', '', ext_title.lower()).strip()
+
+            similarity = SequenceMatcher(None, new_clean, ext_clean).ratio()
+            if similarity >= threshold:
+                print(f"[!] Semantic Duplicate Blocked ({round(similarity*100, 1)}% match): '{new_title[:30]}...' matches '{ext_title[:30]}...'")
                 return True
-
         return False
     except Exception as e:
-        print(f"[!] Supabase Select Error: {e}")
-        return True
+        print(f"[!] Semantic check error: {e}")
+        return False
 
-def save_article_draft(url: str, headline: str, draft: str, status: str = "published"):
-    """Saves article record to Supabase using normalized URL."""
+def save_article_draft(url: str, title: str, draft_text: str, status: str = "draft"):
     if not supabase:
         return
     try:
-        clean_url = url.strip().rstrip('/')
-        supabase.table("articles").insert({
-            "url": clean_url,
-            "headline": headline.strip(),
-            "draft_text": draft,
+        supabase.table("published_articles").upsert({
+            "url": url,
+            "title": title,
+            "draft_text": draft_text,
             "status": status
-        }).execute()
+        }, on_conflict="url").execute()
     except Exception as e:
-        print(f"[!] Supabase Save Error: {e}")
+        print(f"[!] Save draft error: {e}")
 
 def get_recent_articles(limit: int = 15) -> list:
-    """Retrieves recent published articles."""
     if not supabase:
         return []
     try:
-        res = supabase.table("articles").select("headline, draft_text").order("created_at", desc=True).limit(limit).execute()
-        return res.data
+        res = supabase.table("published_articles").select("title").order("created_at", desc=True).limit(limit).execute()
+        return [r["title"] for r in res.data] if res.data else []
     except Exception as e:
-        print(f"[!] Supabase Fetch Recent Error: {e}")
+        print(f"[!] Fetch recent articles error: {e}")
         return []
