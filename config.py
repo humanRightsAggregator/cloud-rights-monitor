@@ -21,8 +21,8 @@ META_ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN", "").strip()
 FB_PAGE_ID = os.getenv("FB_PAGE_ID", "").strip()
 FB_PAGE_ACCESS_TOKEN = (os.getenv("FB_PAGE_ACCESS_TOKEN") or META_ACCESS_TOKEN).strip()
 
-# Threads Credentials
-THREADS_USER_ID = os.getenv("THREADS_USER_ID", "").strip()
+# Threads Credentials (Auto-falls back to IG_USER_ID)
+THREADS_USER_ID = (os.getenv("THREADS_USER_ID") or IG_USER_ID).strip()
 THREADS_ACCESS_TOKEN = (os.getenv("THREADS_ACCESS_TOKEN") or META_ACCESS_TOKEN).strip()
 
 # --- 11 Hybrid RSS Feeds Monitoring List ---
