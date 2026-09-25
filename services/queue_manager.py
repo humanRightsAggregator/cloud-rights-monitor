@@ -12,7 +12,7 @@ if GEMINI_API_KEY:
         print(f"[!] Gemini Queue Manager config error: {e}")
 
 def score_article_with_ai(title: str, snippet: str) -> tuple:
-    """Evaluates human rights importance (60%) and global popularity/trending potential (40%)."""
+    """Evaluates human rights importance (60%) and global popularity/trending potential (40%). Returns (imp, pop, err)."""
     prompt = f"""
     You are an expert global news editor and human rights analyst.
     Evaluate this news report:
@@ -20,8 +20,8 @@ def score_article_with_ai(title: str, snippet: str) -> tuple:
     - Snippet: {snippet}
 
     Assign two numeric scores from 1.0 to 10.0:
-    1. "importance_score": Rate gravity of human rights impact (10 = active genocide, war crimes, mass displacement; 1 = routine organizational notice).
-    2. "popularity_score": Rate search interest & global trending potential (10 = major geopolitical entities/regions, high search interest; 1 = obscure local legal dispute).
+    1. "importance_score": Rate gravity of human rights impact (10 = active genocide, war crimes, mass displacement, crimes against humanity; 1 = routine organizational notice).
+    2. "popularity_score": Rate search interest & global trending potential (10 = major geopolitical entities/regions like UN/US/Iran/Ukraine/China, high search interest; 1 = obscure local legal dispute).
 
     Output strictly valid JSON without markdown:
     {{
@@ -31,29 +31,52 @@ def score_article_with_ai(title: str, snippet: str) -> tuple:
     """
     try:
         model = get_active_model()
-        res = model.generate_content(prompt)
-        clean_text = res.text.replace('```json', '').replace('```', '').strip()
+        # Enforce JSON mode to prevent parsing errors
+        res = model.generate_content(
+            prompt,
+            generation_config={"response_mime_type": "application/json"}
+        )
+        clean_text = res.text.strip()
         data = json.loads(clean_text)
         
-        imp = float(data.get("importance_score", 5.0))
-        pop = float(data.get("popularity_score", 5.0))
-        return imp, pop
+        imp = float(data.get("importance_score", 0.0))
+        pop = float(data.get("popularity_score", 0.0))
+        if imp == 0.0 or pop == 0.0:
+            return None, None, "AI returned zero/invalid scores"
+            
+        return imp, pop, None
     except Exception as e:
         print(f"[!] AI Scoring error for '{title[:25]}': {e}")
-        return 5.0, 5.0
+        return None, None, str(e)
 
 def process_and_queue_article(title: str, snippet: str, url: str, image_url: str, source_feed: str) -> dict:
-    """Scores article, applies 5.5 auto-purge threshold, and queues or fast-tracks it."""
-    existing = supabase.table("article_queue").select("id").eq("url", url).execute()
-    if existing.data:
+    """Scores article, applies 5.5 auto-purge threshold, and handles scoring errors safely."""
+    existing = supabase.table("article_queue").select("id, status").eq("url", url).execute()
+    if existing.data and existing.data[0]["status"] not in ["needs_rescore"]:
         return {"action": "ignored", "reason": "already_queued"}
 
-    imp_score, pop_score = score_article_with_ai(title, snippet)
+    imp_score, pop_score, err = score_article_with_ai(title, snippet)
+
+    # Prevent silent purge: if AI fails, mark as 'needs_rescore' instead of auto-purging
+    if err or imp_score is None:
+        supabase.table("article_queue").upsert({
+            "url": url,
+            "title": title,
+            "snippet": snippet,
+            "image_url": image_url,
+            "source_feed": source_feed,
+            "importance_score": 0.0,
+            "popularity_score": 0.0,
+            "combined_score": 0.0,
+            "status": "needs_rescore"
+        }, on_conflict="url").execute()
+        return {"action": "needs_rescore", "error": err}
+
     combined_score = round((imp_score * 0.6) + (pop_score * 0.4), 2)
 
     # 1. Auto-Purge Rule (< 5.5)
     if combined_score < 5.5:
-        supabase.table("article_queue").insert({
+        supabase.table("article_queue").upsert({
             "url": url,
             "title": title,
             "snippet": snippet,
@@ -63,13 +86,13 @@ def process_and_queue_article(title: str, snippet: str, url: str, image_url: str
             "popularity_score": pop_score,
             "combined_score": combined_score,
             "status": "discarded"
-        }).execute()
+        }, on_conflict="url").execute()
         return {"action": "discarded", "score": combined_score}
 
     # 2. Breaking News Fast-Track (>= 9.0)
     status = "fast_tracked" if combined_score >= 9.0 else "queued"
 
-    record = supabase.table("article_queue").insert({
+    record = supabase.table("article_queue").upsert({
         "url": url,
         "title": title,
         "snippet": snippet,
@@ -79,7 +102,7 @@ def process_and_queue_article(title: str, snippet: str, url: str, image_url: str
         "popularity_score": pop_score,
         "combined_score": combined_score,
         "status": status
-    }).execute()
+    }, on_conflict="url").execute()
 
     record_data = record.data[0] if record.data else {}
     return {"action": status, "score": combined_score, "data": record_data}
@@ -114,6 +137,51 @@ def get_top_prioritized_queue(limit: int = 2) -> list:
                 break
 
     return selected_batch
+
+def rescore_discarded_or_pending_articles() -> dict:
+    """Rescue utility to re-evaluate articles stuck in 'discarded' with a default 5.0 score or 'needs_rescore' status."""
+    response = supabase.table("article_queue").select("*").in_("status", ["discarded", "needs_rescore"]).execute()
+    items = response.data or []
+    
+    rescored_total = 0
+    newly_queued = 0
+    fast_tracked = 0
+    errors = []
+
+    for item in items:
+        # Rescore if it was stuck on default 5.0 or marked for rescore
+        if item["combined_score"] in [5.0, 0.0] or item["status"] == "needs_rescore":
+            imp_score, pop_score, err = score_article_with_ai(item["title"], item["snippet"])
+            if err or imp_score is None:
+                errors.append(f"Rescore error for '{item['title'][:25]}': {err}")
+                continue
+
+            combined_score = round((imp_score * 0.6) + (pop_score * 0.4), 2)
+            
+            if combined_score >= 9.0:
+                new_status = "fast_tracked"
+                fast_tracked += 1
+            elif combined_score >= 5.5:
+                new_status = "queued"
+                newly_queued += 1
+            else:
+                new_status = "discarded"
+
+            supabase.table("article_queue").update({
+                "importance_score": imp_score,
+                "popularity_score": pop_score,
+                "combined_score": combined_score,
+                "status": new_status
+            }).eq("id", item["id"]).execute()
+            
+            rescored_total += 1
+
+    return {
+        "rescored_total": rescored_total,
+        "newly_queued": newly_queued,
+        "fast_tracked": fast_tracked,
+        "errors": errors
+    }
 
 def get_queue_status_metrics() -> tuple:
     """Returns (total_pending_count, next_up_title)."""
