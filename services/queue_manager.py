@@ -13,7 +13,6 @@ if GEMINI_API_KEY:
         print(f"[!] Gemini Queue Manager config error: {e}")
 
 def score_article_with_ai(title: str, snippet: str) -> tuple:
-    """Evaluates human rights importance (60%) and global popularity/trending potential (40%). Returns (imp, pop, err)."""
     prompt = f"""
     You are an expert global news editor and human rights analyst.
     Evaluate this news report:
@@ -21,8 +20,8 @@ def score_article_with_ai(title: str, snippet: str) -> tuple:
     - Snippet: {snippet}
 
     Assign two numeric scores from 1.0 to 10.0:
-    1. "importance_score": Rate gravity of human rights impact (10 = active genocide, war crimes, mass displacement, crimes against humanity; 1 = routine organizational notice).
-    2. "popularity_score": Rate search interest & global trending potential (10 = major geopolitical entities/regions like UN/US/Iran/Ukraine/China, high search interest; 1 = obscure local legal dispute).
+    1. "importance_score": Rate gravity of human rights impact (10 = active genocide, war crimes, mass displacement; 1 = routine organizational notice).
+    2. "popularity_score": Rate search interest & global trending potential (10 = major geopolitical entities, high search interest; 1 = obscure local dispute).
 
     Output strictly valid JSON without markdown:
     {{
@@ -58,8 +57,25 @@ def score_article_with_ai(title: str, snippet: str) -> tuple:
 
     return None, None, last_error or "All candidate models failed"
 
+def clean_expired_queue_items() -> int:
+    """Removes items older than 48 hours unless importance_score >= 8.0."""
+    response = supabase.table("article_queue").select("*").eq("status", "queued").execute()
+    items = response.data or []
+    now = datetime.now(timezone.utc)
+    expired_count = 0
+
+    for item in items:
+        created_at = datetime.fromisoformat(item["created_at"].replace("Z", "+00:00"))
+        hours_in_queue = (now - created_at).total_seconds() / 3600.0
+        
+        # Expiry Logic: > 48 hours AND Importance < 8.0
+        if hours_in_queue > 48.0 and float(item.get("importance_score", 0)) < 8.0:
+            supabase.table("article_queue").update({"status": "discarded_expired"}).eq("id", item["id"]).execute()
+            expired_count += 1
+            
+    return expired_count
+
 def process_and_queue_article(title: str, snippet: str, url: str, image_url: str, source_feed: str) -> dict:
-    """Scores article, applies 5.5 auto-purge threshold, and handles scoring errors safely."""
     existing = supabase.table("article_queue").select("id, status").eq("url", url).execute()
     if existing.data and existing.data[0]["status"] not in ["needs_rescore"]:
         return {"action": "ignored", "reason": "already_queued"}
@@ -68,53 +84,34 @@ def process_and_queue_article(title: str, snippet: str, url: str, image_url: str
 
     if err or imp_score is None:
         supabase.table("article_queue").upsert({
-            "url": url,
-            "title": title,
-            "snippet": snippet,
-            "image_url": image_url,
-            "source_feed": source_feed,
-            "importance_score": 0.0,
-            "popularity_score": 0.0,
-            "combined_score": 0.0,
-            "status": "needs_rescore"
+            "url": url, "title": title, "snippet": snippet, "image_url": image_url,
+            "source_feed": source_feed, "importance_score": 0.0, "popularity_score": 0.0,
+            "combined_score": 0.0, "status": "needs_rescore"
         }, on_conflict="url").execute()
         return {"action": "needs_rescore", "error": err}
 
     combined_score = round((imp_score * 0.6) + (pop_score * 0.4), 2)
 
+    # 4-Tier Traffic Controller Logic
     if combined_score < 5.5:
-        supabase.table("article_queue").upsert({
-            "url": url,
-            "title": title,
-            "snippet": snippet,
-            "image_url": image_url,
-            "source_feed": source_feed,
-            "importance_score": imp_score,
-            "popularity_score": pop_score,
-            "combined_score": combined_score,
-            "status": "discarded"
-        }, on_conflict="url").execute()
-        return {"action": "discarded", "score": combined_score}
-
-    status = "fast_tracked" if combined_score >= 9.0 else "queued"
+        status = "discarded"
+    elif combined_score < 6.8:
+        status = "low_tier_immediate"
+    elif combined_score < 8.5:
+        status = "queued"
+    else:
+        status = "fast_tracked"
 
     record = supabase.table("article_queue").upsert({
-        "url": url,
-        "title": title,
-        "snippet": snippet,
-        "image_url": image_url,
-        "source_feed": source_feed,
-        "importance_score": imp_score,
-        "popularity_score": pop_score,
-        "combined_score": combined_score,
-        "status": status
+        "url": url, "title": title, "snippet": snippet, "image_url": image_url,
+        "source_feed": source_feed, "importance_score": imp_score,
+        "popularity_score": pop_score, "combined_score": combined_score, "status": status
     }, on_conflict="url").execute()
 
     record_data = record.data[0] if record.data else {}
     return {"action": status, "score": combined_score, "data": record_data}
 
 def get_top_prioritized_queue(limit: int = 2) -> list:
-    """Retrieves top-ranked queued items applying Time-Decay and Source Diversity constraints."""
     response = supabase.table("article_queue").select("*").eq("status", "queued").execute()
     queued_items = response.data or []
 
@@ -122,18 +119,15 @@ def get_top_prioritized_queue(limit: int = 2) -> list:
         return []
 
     now = datetime.now(timezone.utc)
-
     for item in queued_items:
         created_at = datetime.fromisoformat(item["created_at"].replace("Z", "+00:00"))
         hours_in_queue = (now - created_at).total_seconds() / 3600.0
-        effective_score = item["combined_score"] - (hours_in_queue * 0.15)
-        item["effective_score"] = effective_score
+        item["effective_score"] = item["combined_score"] - (hours_in_queue * 0.15)
 
     queued_items.sort(key=lambda x: x["effective_score"], reverse=True)
 
     selected_batch = []
     used_sources = set()
-
     for item in queued_items:
         source = item.get("source_feed")
         if source not in used_sources:
@@ -145,55 +139,44 @@ def get_top_prioritized_queue(limit: int = 2) -> list:
     return selected_batch
 
 def rescore_discarded_or_pending_articles() -> dict:
-    """Rescue utility to re-evaluate articles stuck in 'discarded' with a default 5.0 score or 'needs_rescore' status."""
     response = supabase.table("article_queue").select("*").in_("status", ["discarded", "needs_rescore"]).execute()
     items = response.data or []
     
-    rescored_total = 0
-    newly_queued = 0
-    fast_tracked = 0
+    rescored_total = newly_queued = fast_tracked = 0
     errors = []
 
     for item in items:
         if item["combined_score"] in [5.0, 0.0] or item["status"] == "needs_rescore":
             imp_score, pop_score, err = score_article_with_ai(item["title"], item["snippet"])
-            
             if err or imp_score is None:
                 errors.append(f"'{item['title'][:30]}': {err}")
             else:
                 combined_score = round((imp_score * 0.6) + (pop_score * 0.4), 2)
                 
-                if combined_score >= 9.0:
-                    new_status = "fast_tracked"
-                    fast_tracked += 1
-                elif combined_score >= 5.5:
+                # Re-apply 4-Tier Logic
+                if combined_score < 5.5:
+                    new_status = "discarded"
+                elif combined_score < 6.8:
+                    new_status = "low_tier_immediate"
+                    newly_queued += 1 # Treating low-tier as rescued for stats
+                elif combined_score < 8.5:
                     new_status = "queued"
                     newly_queued += 1
                 else:
-                    new_status = "discarded"
+                    new_status = "fast_tracked"
+                    fast_tracked += 1
 
                 supabase.table("article_queue").update({
-                    "importance_score": imp_score,
-                    "popularity_score": pop_score,
-                    "combined_score": combined_score,
-                    "status": new_status
+                    "importance_score": imp_score, "popularity_score": pop_score,
+                    "combined_score": combined_score, "status": new_status
                 }).eq("id", item["id"]).execute()
                 
                 rescored_total += 1
-
             time.sleep(2.5)
 
-    return {
-        "rescored_total": rescored_total,
-        "newly_queued": newly_queued,
-        "fast_tracked": fast_tracked,
-        "errors": errors
-    }
+    return {"rescored_total": rescored_total, "newly_queued": newly_queued, "fast_tracked": fast_tracked, "errors": errors}
 
 def get_queue_status_metrics() -> tuple:
-    """Returns (total_pending_count, next_up_title)."""
     response = supabase.table("article_queue").select("title, combined_score").eq("status", "queued").order("combined_score", desc=True).execute()
     data = response.data or []
-    count = len(data)
-    next_title = data[0]["title"] if count > 0 else ""
-    return count, next_title
+    return len(data), data[0]["title"] if data else ""
