@@ -11,6 +11,9 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 FB_PAGE_ID = os.getenv("FB_PAGE_ID", "")
 FB_PAGE_ACCESS_TOKEN = os.getenv("FB_PAGE_ACCESS_TOKEN", "")
 
+# Restored the missing META_ACCESS_TOKEN required by services/threads.py
+META_ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN", "")
+
 IG_USER_ID = os.getenv("IG_USER_ID", "")
 THREADS_USER_ID = os.getenv("THREADS_USER_ID", "")
 
