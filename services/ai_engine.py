@@ -2,15 +2,21 @@ import json
 import google.generativeai as genai
 from config import GEMINI_API_KEY, GEMINI_API_KEY_2
 
-def _get_model(api_key: str):
-    if not api_key:
-        return None
-    genai.configure(api_key=api_key)
-    return genai.GenerativeModel("gemini-1.5-flash")
+def get_authorized_models() -> list:
+    """Returns a list of active Gemini model instances configured across available API keys."""
+    models = []
+    keys = [k.strip() for k in [GEMINI_API_KEY, GEMINI_API_KEY_2] if k and k.strip()]
+    for key in keys:
+        try:
+            genai.configure(api_key=key)
+            models.append(genai.GenerativeModel("gemini-1.5-flash"))
+        except Exception as e:
+            print(f"[!] Failed to initialize Gemini model instance: {e}")
+    return models
 
 def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list = None) -> tuple:
     """Generates platform-tailored social media captions using multi-key Gemini failover."""
-    keys = [k for k in [GEMINI_API_KEY, GEMINI_API_KEY_2] if k]
+    keys = [k.strip() for k in [GEMINI_API_KEY, GEMINI_API_KEY_2] if k and k.strip()]
     if not keys:
         return None, "No Gemini API keys configured."
 
@@ -36,11 +42,11 @@ Return ONLY raw JSON in this format:
 
     for idx, key in enumerate(keys):
         try:
-            model = _get_model(key)
-            if not model:
-                continue
+            genai.configure(api_key=key)
+            model = genai.GenerativeModel("gemini-1.5-flash")
             response = model.generate_content(prompt)
             clean_text = response.text.strip()
+            
             if clean_text.startswith("```json"):
                 clean_text = clean_text[7:]
             if clean_text.endswith("```"):
