@@ -1,6 +1,5 @@
 import re
 import requests
-from bs4 import BeautifulSoup
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
@@ -29,7 +28,7 @@ def get_fallback_by_topic(text: str) -> str:
     return TOPIC_FALLBACKS["global"]
 
 def extract_article_image(entry: dict, article_url: str) -> str:
-    """Extracts article image from RSS metadata, webpage tags, or returns a topic fallback."""
+    """Extracts article image from RSS metadata, webpage OpenGraph tags, or returns a topic fallback."""
     # 1. Check RSS feed enclosure / media:content
     if "media_content" in entry and entry["media_content"]:
         for media in entry["media_content"]:
@@ -41,17 +40,24 @@ def extract_article_image(entry: dict, article_url: str) -> str:
             if enc.get("href") and "image" in enc.get("type", "image"):
                 return enc["href"]
 
-    # 2. Scrape OpenGraph / Twitter metadata directly from the webpage
+    # 2. Extract OpenGraph / Twitter metadata directly via Regular Expressions
     if article_url and article_url.startswith("http"):
         try:
             res = requests.get(article_url, headers=HEADERS, timeout=6)
             if res.status_code == 200:
-                soup = BeautifulSoup(res.text, "html.parser")
+                html_text = res.text
                 
-                # Check og:image or twitter:image tags
-                og_img = soup.find("meta", property="og:image") or soup.find("meta", attrs={"name": "twitter:image"})
-                if og_img and og_img.get("content"):
-                    img_src = og_img["content"].strip()
+                # Check for <meta property="og:image" content="..."> or <meta name="twitter:image" content="...">
+                pattern = r'<meta\s+[^>]*?(?:property|name)=["\'](?:og:image|twitter:image)["\']\s+[^>]*?content=["\']([^"\']+)["\']'
+                match = re.search(pattern, html_text, re.IGNORECASE)
+                
+                if not match:
+                    # Alternative attribute ordering: content before property/name
+                    pattern_alt = r'<meta\s+[^>]*?content=["\']([^"\']+)["\']\s+[^>]*?(?:property|name)=["\'](?:og:image|twitter:image)["\']'
+                    match = re.search(pattern_alt, html_text, re.IGNORECASE)
+
+                if match:
+                    img_src = match.group(1).strip()
                     if img_src.startswith("http"):
                         return img_src
         except Exception:
