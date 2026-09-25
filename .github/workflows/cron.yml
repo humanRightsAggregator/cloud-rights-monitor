@@ -2,24 +2,26 @@ name: Global Human Rights Monitor Scheduler
 
 on:
   schedule:
-    # Runs continuously every 6 hours (00:00, 06:00, 12:00, 18:00 UTC)
+    # 1. Ingestion Runs (Every 6 Hours)
     - cron: '0 */6 * * *'
-  workflow_dispatch: # Allows manual trigger anytime from GitHub
+
+    # 2. Slot 1 Peak Publication: 6:00 PM IST (12:30 PM UTC)
+    - cron: '30 12 * * *'
+
+    # 3. Slot 2 Peak Publication: 10:30 PM IST (5:00 PM UTC)
+    - cron: '0 17 * * *'
+
+  workflow_dispatch:
 
 jobs:
-  run-monitor:
+  run-monitor-tasks:
     runs-on: ubuntu-latest
     steps:
-      - name: Wake Up Render Container
+      - name: Trigger Ingestion Task
         run: |
-          echo "Sending wake-up ping to Render..."
-          curl -s --max-time 30 https://cloud-rights-monitor.onrender.com/ || true
+          curl -s -X GET "https://cloud-rights-monitor.onrender.com/ingest-feeds"
 
-      - name: Wait for Container Boot
-        run: sleep 20
-
-      - name: Execute Monitor Pipeline
+      - name: Trigger Peak Publishing Task (Slot Windows Only)
+        if: github.event.schedule == '30 12 * * *' || github.event.schedule == '0 17 * * *' || github.event_name == 'workflow_dispatch'
         run: |
-          echo "Triggering /run-monitor pipeline..."
-          response=$(curl -s --max-time 30 https://cloud-rights-monitor.onrender.com/run-monitor)
-          echo "Response from server: $response"
+          curl -s -X GET "https://cloud-rights-monitor.onrender.com/publish-queue"
