@@ -6,7 +6,7 @@ from config import SUPABASE_URL, SUPABASE_KEY
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
 def check_article_exists(url: str, title: str) -> bool:
-    """Checks if the exact URL or title exists using safe parameter binding."""
+    """Checks if the exact URL or title exists. On DB disconnect, defaults to True to protect pipeline stability."""
     if not supabase:
         return False
     try:
@@ -17,8 +17,8 @@ def check_article_exists(url: str, title: str) -> bool:
         res_title = supabase.table("article_queue").select("id").eq("title", title).execute()
         return len(res_title.data) > 0 if res_title.data else False
     except Exception as e:
-        print(f"[!] Database check error: {e}")
-        return False
+        print(f"[!] Database check error ({e}). Assuming article exists to avoid duplicate constraint errors.")
+        return True
 
 def is_semantic_duplicate(new_title: str, threshold: float = 0.65) -> bool:
     """Performs local fuzzy matching against recent articles to prevent duplicate story scoring."""
