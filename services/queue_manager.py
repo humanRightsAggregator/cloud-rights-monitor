@@ -4,20 +4,12 @@ from services.ai_engine import get_authorized_models
 from services.database import supabase
 
 def calculate_urgency_score(title: str, snippet: str) -> float:
-    """Calculates news urgency score (1.0 - 10.0) using Gemini models safely."""
-    models = get_authorized_models()
-    if not models:
-        return 7.0  # Default fallback score
-
-    prompt = f"Rate the human rights news urgency of this item from 1.0 to 10.0. Return ONLY a single numeric float.\nTitle: {title}\nSnippet: {snippet}"
-
-    for model in models:
+    """Calculates news urgency score using configured AI scoring functions."""
+    scorers = get_authorized_models()
+    for scorer in scorers:
         try:
-            response = model.generate_content(prompt)
-            match = re.search(r'\d+(\.\d+)?', response.text)
-            if match:
-                score = float(match.group(0))
-                return min(max(score, 1.0), 10.0)
+            score = scorer(title, snippet)
+            return min(max(float(score), 1.0), 10.0)
         except Exception as e:
             print(f"[!] AI Scoring attempt failed: {e}")
             continue
@@ -31,7 +23,6 @@ def process_and_queue_article(title: str, snippet: str, link: str, image_url: st
         "snippet": snippet,
         "url": link,
         "image_url": image_url,
-        "source": source,
         "combined_score": score,
         "status": "pending"
     }
@@ -51,7 +42,7 @@ def process_and_queue_article(title: str, snippet: str, link: str, image_url: st
         return {"action": "discarded", "data": item_data}
 
 def get_top_prioritized_queue(limit: int = 4) -> list:
-    """Fetches highest-scoring pending articles from Supabase queue (Default batch: 4)."""
+    """Fetches highest-scoring pending articles from Supabase queue."""
     if not supabase:
         return []
     try:
