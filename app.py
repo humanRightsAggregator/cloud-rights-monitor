@@ -11,10 +11,11 @@ from services.ai_engine import generate_ai_draft
 from services.media_extractor import extract_article_image
 from services.story_generator import create_story_card
 from services.queue_manager import (
-    process_and_queue_article, get_top_prioritized_queue, get_queue_status_metrics
+    process_and_queue_article, get_top_prioritized_queue, get_queue_status_metrics,
+    rescore_discarded_or_pending_articles
 )
 from services.telegram import (
-    send_telegram_notification, send_ingestion_summary, send_publishing_summary
+    send_telegram_notification, send_ingestion_summary, send_publishing_summary, send_telegram_message
 )
 from services.threads import post_to_threads
 from services.facebook import post_to_facebook, post_story_to_facebook
@@ -115,11 +116,12 @@ def ingest_feeds_task():
                     print(f"[!] Fast-Tracking Breaking News (Score {res['score']}): {title}")
                     publish_single_article(res["data"], recent_topics)
                     supabase.table("article_queue").update({"status": "published"}).eq("url", link).execute()
+                elif res["action"] == "needs_rescore":
+                    run_errors.append(f"AI Score Failed for '{title[:25]}': {res.get('error')}")
 
         except Exception as e:
             run_errors.append(f"Feed error for {feed_url}: {e}")
 
-    # Gather queue totals for summary
     total_pending, _ = get_queue_status_metrics()
     stats["total_pending_queue"] = total_pending
     stats["top_queued"].sort(key=lambda x: x.get("combined_score", 0), reverse=True)
@@ -152,6 +154,18 @@ def publish_queue_task():
     send_publishing_summary(published_items, remaining_count, next_up_title, run_errors)
     print(f"[+] Peak publishing complete. Published: {len(published_items)}")
 
+def rescore_task():
+    """Background task to rescore purged or stuck items."""
+    res = rescore_discarded_or_pending_articles()
+    msg = (
+        f"🔄 *RE-SCORE RECOVERY RUN COMPLETE*\n\n"
+        f"• Articles Rescored: {res['rescored_total']}\n"
+        f"• Rescued to Queue (>=5.5): {res['newly_queued']}\n"
+        f"• Fast-Tracked (>=9.0): {res['fast_tracked']}\n"
+        f"• Errors: {len(res['errors'])}"
+    )
+    send_telegram_message(msg)
+
 @app.get("/generate-story-card")
 def generate_story_card_endpoint(title: str = "Human Rights Report", img: str = ""):
     img_buf = create_story_card(title, img)
@@ -170,3 +184,8 @@ def trigger_ingestion(background_tasks: BackgroundTasks):
 def trigger_publishing(background_tasks: BackgroundTasks):
     background_tasks.add_task(publish_queue_task)
     return {"status": "Accepted", "task": "Peak Publishing"}
+
+@app.api_route("/rescore-queue", methods=["GET", "HEAD"])
+def trigger_rescore(background_tasks: BackgroundTasks):
+    background_tasks.add_task(rescore_task)
+    return {"status": "Accepted", "task": "Queue Rescore Recovery"}
