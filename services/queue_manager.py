@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 import google.generativeai as genai
 from config import GEMINI_API_KEY
 from services.database import supabase
-from services.ai_engine import get_active_model
 
 if GEMINI_API_KEY:
     try:
@@ -30,26 +29,33 @@ def score_article_with_ai(title: str, snippet: str) -> tuple:
       "popularity_score": 7.0
     }}
     """
-    try:
-        model = get_active_model()
-        try:
-            gen_config = genai.types.GenerationConfig(response_mime_type="application/json")
-            res = model.generate_content(prompt, generation_config=gen_config)
-        except Exception:
-            res = model.generate_content(prompt)
+    model_candidates = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-latest']
+    last_error = None
 
-        clean_text = res.text.replace('```json', '').replace('```', '').strip()
-        data = json.loads(clean_text)
-        
-        imp = float(data.get("importance_score", 0.0))
-        pop = float(data.get("popularity_score", 0.0))
-        if imp == 0.0 or pop == 0.0:
-            return None, None, "AI returned zero/invalid scores"
+    for model_name in model_candidates:
+        try:
+            model = genai.GenerativeModel(model_name)
+            try:
+                gen_config = genai.types.GenerationConfig(response_mime_type="application/json")
+                res = model.generate_content(prompt, generation_config=gen_config)
+            except Exception:
+                res = model.generate_content(prompt)
+
+            clean_text = res.text.replace('```json', '').replace('```', '').strip()
+            data = json.loads(clean_text)
             
-        return imp, pop, None
-    except Exception as e:
-        print(f"[!] AI Scoring error for '{title[:25]}': {e}")
-        return None, None, str(e)
+            imp = float(data.get("importance_score", 0.0))
+            pop = float(data.get("popularity_score", 0.0))
+            if imp == 0.0 or pop == 0.0:
+                continue
+                
+            return imp, pop, None
+        except Exception as e:
+            last_error = str(e)
+            print(f"[!] Scoring fallback on '{model_name}' for '{title[:20]}': {e}")
+            continue
+
+    return None, None, last_error or "All candidate models failed"
 
 def process_and_queue_article(title: str, snippet: str, url: str, image_url: str, source_feed: str) -> dict:
     """Scores article, applies 5.5 auto-purge threshold, and handles scoring errors safely."""
@@ -174,7 +180,6 @@ def rescore_discarded_or_pending_articles() -> dict:
                 
                 rescored_total += 1
 
-            # 2.5-second pacing delay to remain safely under the Gemini 15 RPM limit
             time.sleep(2.5)
 
     return {
