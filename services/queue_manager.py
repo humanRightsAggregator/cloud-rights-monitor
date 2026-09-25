@@ -16,7 +16,7 @@ def calculate_urgency_score(title: str, snippet: str) -> float:
     return 7.0
 
 def process_and_queue_article(title: str, snippet: str, link: str, image_url: str, source: str) -> dict:
-    """Evaluates and routes incoming RSS items into the 4-tier pipeline."""
+    """Evaluates and routes incoming RSS items into the 4-tier pipeline using upsert protection."""
     score = calculate_urgency_score(title, snippet)
     item_data = {
         "title": title,
@@ -32,9 +32,9 @@ def process_and_queue_article(title: str, snippet: str, link: str, image_url: st
     elif score >= 6.8:
         if supabase:
             try:
-                supabase.table("article_queue").insert(item_data).execute()
+                supabase.table("article_queue").upsert(item_data, on_conflict="url").execute()
             except Exception as e:
-                print(f"[!] Queue insert error: {e}")
+                print(f"[!] Queue upsert error: {e}")
         return {"action": "queued", "data": item_data}
     elif score >= 5.5:
         return {"action": "low_tier_immediate", "data": item_data}
