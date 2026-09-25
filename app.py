@@ -1,12 +1,15 @@
 import time
 import html
 import re
+import requests
 import feedparser
 from urllib.parse import quote_plus
 from fastapi import FastAPI, BackgroundTasks
 from fastapi.responses import Response
-from config import RSS_FEEDS
-from services.database import check_article_exists, save_article_draft, get_recent_articles, supabase
+from config import RSS_FEEDS, META_ACCESS_TOKEN
+from services.database import (
+    check_article_exists, is_semantic_duplicate, save_article_draft, get_recent_articles, supabase
+)
 from services.ai_engine import generate_ai_draft
 from services.media_extractor import extract_article_image
 from services.story_generator import create_story_card
@@ -59,13 +62,13 @@ def ingest_feeds_task():
     recent_topics = get_recent_articles(limit=15)
     run_errors = []
     
-    # Trigger Expiration Cleanup before scanning new feeds
     expired_count = clean_expired_queue_items()
 
     stats = {
         "feeds_scanned": len(RSS_FEEDS), "evaluated_count": 0, "purged_count": 0,
-        "expired_count": expired_count, "low_tier_count": 0, "low_tier_items": [],
-        "queued_count": 0, "top_queued": [], "fast_tracked": [], "total_pending_queue": 0
+        "expired_count": expired_count, "semantic_duplicates": 0, "low_tier_count": 0,
+        "low_tier_items": [], "queued_count": 0, "top_queued": [], "fast_tracked": [],
+        "total_pending_queue": 0
     }
 
     for feed_url in RSS_FEEDS:
@@ -77,6 +80,11 @@ def ingest_feeds_task():
                 snippet = clean_html(entry.get('summary', '') or entry.get('description', ''))
 
                 if not link or check_article_exists(link, title):
+                    continue
+
+                # Local Semantic Deduplication Check (Saves Gemini API Quota)
+                if is_semantic_duplicate(title):
+                    stats["semantic_duplicates"] += 1
                     continue
 
                 stats["evaluated_count"] += 1
@@ -103,21 +111,16 @@ def ingest_feeds_task():
     stats["total_pending_queue"], _ = get_queue_status_metrics()
     stats["top_queued"].sort(key=lambda x: x.get("combined_score", 0), reverse=True)
 
-    # 1. Send the report to Telegram immediately
     send_ingestion_summary(stats, run_errors)
-    print(f"[+] Ingestion complete. Evaluated: {stats['evaluated_count']}")
+    print(f"[+] Ingestion complete. Evaluated: {stats['evaluated_count']}, Semantic Duplicates Blocked: {stats['semantic_duplicates']}")
 
-    # 2. Safely Drip-Feed the Low-Tier content in the background (Anti-Spam Pacing)
     if stats["low_tier_items"]:
         print(f"[*] Starting background drip-feed for {len(stats['low_tier_items'])} low-tier items...")
         for idx, item in enumerate(stats["low_tier_items"]):
             publish_single_article(item, recent_topics)
             supabase.table("article_queue").update({"status": "published"}).eq("id", item["id"]).execute()
-            
-            # Apply a 3-minute delay between posts, skip delay if it's the very last item
             if idx < len(stats["low_tier_items"]) - 1:
-                print(f"[*] Post complete. Sleeping 180s for anti-spam pacing before next item...")
-                time.sleep(180) 
+                time.sleep(180)
         print("[+] Low-tier drip-feed complete.")
 
 def publish_queue_task():
@@ -151,6 +154,38 @@ def rescore_task():
 def generate_story_card_endpoint(title: str = "Human Rights Report", img: str = ""):
     return Response(content=create_story_card(title, img).getvalue(), media_type="image/jpeg")
 
+@app.api_route("/check-tokens", methods=["GET", "HEAD"])
+def check_meta_tokens():
+    """Inspects Meta API access token expiration status."""
+    if not META_ACCESS_TOKEN:
+        return {"status": "error", "message": "META_ACCESS_TOKEN is missing"}
+    
+    url = f"https://graph.facebook.com/debug_token?input_token={META_ACCESS_TOKEN}&access_token={META_ACCESS_TOKEN}"
+    try:
+        res = requests.get(url, timeout=10).json()
+        data = res.get("data", {})
+        is_valid = data.get("is_valid", False)
+        expires_at = data.get("expires_at", 0)
+        
+        if not is_valid:
+            msg = "🚨 *URGENT META TOKEN ERROR*\n\nYour Meta Access Token is invalid or expired! Publishing to Threads, Facebook, and Instagram will fail until refreshed."
+            send_telegram_message(msg)
+            return {"status": "invalid", "data": data}
+
+        if expires_at == 0:
+            return {"status": "valid", "type": "Never-Expiring Page Token"}
+
+        time_left = expires_at - int(time.time())
+        days_left = round(time_left / 86400, 1)
+
+        if days_left <= 7:
+            msg = f"⚠️ *META TOKEN EXPIRING SOON*\n\nYour Meta Access Token will expire in *{days_left} days*. Please generate a fresh token in the Facebook Developer Portal."
+            send_telegram_message(msg)
+
+        return {"status": "valid", "days_remaining": days_left, "data": data}
+    except Exception as e:
+        return {"status": "error", "exception": str(e)}
+
 @app.api_route("/", methods=["GET", "HEAD"])
 def health_check(): return {"status": "Online"}
 
@@ -166,5 +201,5 @@ def trigger_publishing(background_tasks: BackgroundTasks):
 
 @app.api_route("/rescore-queue", methods=["GET", "HEAD"])
 def trigger_rescore(background_tasks: BackgroundTasks):
-    background_tasks.add_task(rescore_task)
+    background_tasks.add_task(trigger_rescore)
     return {"status": "Accepted", "task": "Rescore"}
