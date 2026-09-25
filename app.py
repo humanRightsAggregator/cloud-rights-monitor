@@ -156,14 +156,14 @@ def generate_story_card_endpoint(title: str = "Human Rights Report", img: str = 
 
 @app.api_route("/check-tokens", methods=["GET", "HEAD"])
 def check_meta_tokens():
-    """Validates Meta API access token via direct account ping."""
-    if not META_ACCESS_TOKEN:
+    """Validates Meta API access token via direct account ping with sanitized query params."""
+    token = META_ACCESS_TOKEN.strip() if META_ACCESS_TOKEN else ""
+    if not token:
         return {"status": "error", "message": "META_ACCESS_TOKEN is missing in environment variables"}
     
-    # Direct account validation call
-    url = f"https://graph.facebook.com/v19.0/me?access_token={META_ACCESS_TOKEN}"
+    url = "https://graph.facebook.com/v19.0/me"
     try:
-        res = requests.get(url, timeout=10)
+        res = requests.get(url, params={"access_token": token}, timeout=10)
         data = res.json()
         
         if res.status_code == 200 and "id" in data:
@@ -174,7 +174,8 @@ def check_meta_tokens():
                 "account_name": data.get("name", "N/A")
             }
         else:
-            msg = f"🚨 *URGENT META TOKEN ERROR*\n\nYour Meta Access Token failed validation: {data.get('error', {}).get('message', 'Unknown error')}"
+            err_msg = data.get("error", {}).get("message", "Unknown error")
+            msg = f"🚨 *URGENT META TOKEN ERROR*\n\nYour Meta Access Token failed validation: {err_msg}"
             send_telegram_message(msg)
             return {"status": "invalid", "error": data}
     except Exception as e:
@@ -195,5 +196,5 @@ def trigger_publishing(background_tasks: BackgroundTasks):
 
 @app.api_route("/rescore-queue", methods=["GET", "HEAD"])
 def trigger_rescore(background_tasks: BackgroundTasks):
-    background_tasks.add_task(trigger_rescore)
+    background_tasks.add_task(rescore_task)
     return {"status": "Accepted", "task": "Rescore"}
