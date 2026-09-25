@@ -10,26 +10,27 @@ if GEMINI_API_KEY:
 
 MASTER_HASHTAGS = ["#HumanRights", "#HumanDignity", "#JusticeNow"]
 
-def get_active_model():
-    """Dynamically locates a verified active Gemini model for this API key."""
-    preferred_candidates = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-latest']
-
-    for candidate in preferred_candidates:
-        try:
-            return genai.GenerativeModel(candidate)
-        except Exception:
-            continue
-
+def get_authorized_models() -> list:
+    """Queries Google API directly for models authorized and supporting text generation for this API key."""
     try:
+        valid_models = []
         for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods and 'flash' in m.name:
-                model_name = m.name.replace('models/', '')
-                if '2.5' not in model_name:
-                    return genai.GenerativeModel(model_name)
+            if 'generateContent' in m.supported_generation_methods:
+                m_name = m.name.replace('models/', '')
+                if '2.5' not in m_name:
+                    valid_models.append(m_name)
+        
+        # Prioritize 'flash' models, then remaining supported models
+        flash_models = [m for m in valid_models if 'flash' in m]
+        other_models = [m for m in valid_models if 'flash' not in m]
+        
+        result = flash_models + other_models
+        if result:
+            return result
     except Exception as e:
-        print(f"[!] Dynamic model lookup notice: {e}")
+        print(f"[!] Dynamic list_models query error: {e}")
 
-    return genai.GenerativeModel('gemini-1.5-flash')
+    return ['gemini-1.5-flash']
 
 def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list) -> tuple:
     fallback_threads = f"{title}\n\n{snippet[:200]}...\n\nSource: {link}\n\n#HumanRights"
@@ -70,7 +71,8 @@ def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list) 
     }}
     """
 
-    for model_candidate in ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-latest']:
+    model_candidates = get_authorized_models()
+    for model_candidate in model_candidates:
         try:
             model = genai.GenerativeModel(model_candidate)
             response = model.generate_content(prompt)
@@ -90,4 +92,4 @@ def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list) 
         "threads": fallback_threads,
         "facebook": fallback_long,
         "instagram": fallback_long
-    }, "All draft generation models failed"
+    }, "All dynamically detected draft generation models failed"
