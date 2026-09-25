@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import google.generativeai as genai
 from config import GEMINI_API_KEY
 from services.database import supabase
+from services.ai_engine import get_authorized_models
 
 if GEMINI_API_KEY:
     try:
@@ -29,7 +30,7 @@ def score_article_with_ai(title: str, snippet: str) -> tuple:
       "popularity_score": 7.0
     }}
     """
-    model_candidates = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-latest']
+    model_candidates = get_authorized_models()
     last_error = None
 
     for model_name in model_candidates:
@@ -52,7 +53,7 @@ def score_article_with_ai(title: str, snippet: str) -> tuple:
             return imp, pop, None
         except Exception as e:
             last_error = str(e)
-            print(f"[!] Scoring fallback on '{model_name}' for '{title[:20]}': {e}")
+            print(f"[!] Scoring fallback on dynamically fetched '{model_name}' for '{title[:20]}': {e}")
             continue
 
     return None, None, last_error or "All candidate models failed"
