@@ -156,33 +156,27 @@ def generate_story_card_endpoint(title: str = "Human Rights Report", img: str = 
 
 @app.api_route("/check-tokens", methods=["GET", "HEAD"])
 def check_meta_tokens():
-    """Inspects Meta API access token expiration status."""
+    """Validates Meta API access token via direct account ping."""
     if not META_ACCESS_TOKEN:
-        return {"status": "error", "message": "META_ACCESS_TOKEN is missing"}
+        return {"status": "error", "message": "META_ACCESS_TOKEN is missing in environment variables"}
     
-    url = f"https://graph.facebook.com/debug_token?input_token={META_ACCESS_TOKEN}&access_token={META_ACCESS_TOKEN}"
+    # Direct account validation call
+    url = f"https://graph.facebook.com/v19.0/me?access_token={META_ACCESS_TOKEN}"
     try:
-        res = requests.get(url, timeout=10).json()
-        data = res.get("data", {})
-        is_valid = data.get("is_valid", False)
-        expires_at = data.get("expires_at", 0)
+        res = requests.get(url, timeout=10)
+        data = res.json()
         
-        if not is_valid:
-            msg = "🚨 *URGENT META TOKEN ERROR*\n\nYour Meta Access Token is invalid or expired! Publishing to Threads, Facebook, and Instagram will fail until refreshed."
+        if res.status_code == 200 and "id" in data:
+            return {
+                "status": "valid",
+                "message": "Token is active and authorized for publishing.",
+                "account_id": data.get("id"),
+                "account_name": data.get("name", "N/A")
+            }
+        else:
+            msg = f"🚨 *URGENT META TOKEN ERROR*\n\nYour Meta Access Token failed validation: {data.get('error', {}).get('message', 'Unknown error')}"
             send_telegram_message(msg)
-            return {"status": "invalid", "data": data}
-
-        if expires_at == 0:
-            return {"status": "valid", "type": "Never-Expiring Page Token"}
-
-        time_left = expires_at - int(time.time())
-        days_left = round(time_left / 86400, 1)
-
-        if days_left <= 7:
-            msg = f"⚠️ *META TOKEN EXPIRING SOON*\n\nYour Meta Access Token will expire in *{days_left} days*. Please generate a fresh token in the Facebook Developer Portal."
-            send_telegram_message(msg)
-
-        return {"status": "valid", "days_remaining": days_left, "data": data}
+            return {"status": "invalid", "error": data}
     except Exception as e:
         return {"status": "error", "exception": str(e)}
 
