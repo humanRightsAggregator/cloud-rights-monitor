@@ -4,19 +4,18 @@ import requests
 import google.generativeai as genai
 from config import GROQ_API_KEY, GEMINI_API_KEY, GEMINI_API_KEY_2
 
-# Active models on Groq (ordered by speed and free tier availability)
+# Verified active Model IDs directly from GroqCloud Docs
 GROQ_MODELS = [
-    "llama-3.1-8b-instant",
     "llama-3.3-70b-versatile",
-    "llama3-70b-8192",
-    "llama3-8b-8192"
+    "llama-3.1-8b-instant",
+    "openai/gpt-oss-20b",
+    "qwen/qwen3.8-27b"
 ]
 
 # Active models on Gemini
 GEMINI_MODELS = [
     "gemini-1.5-flash",
-    "gemini-2.0-flash",
-    "gemini-1.5-pro"
+    "gemini-2.0-flash"
 ]
 
 def get_authorized_models() -> list:
@@ -24,7 +23,7 @@ def get_authorized_models() -> list:
     return [calculate_ai_score_groq, calculate_ai_score_gemini]
 
 def calculate_ai_score_groq(title: str, snippet: str) -> float:
-    """Calculates news urgency score using Groq API with multi-model fallback."""
+    """Calculates news urgency score using verified Groq model IDs."""
     if not GROQ_API_KEY:
         raise ValueError("GROQ_API_KEY not configured")
 
@@ -97,7 +96,7 @@ Return ONLY raw JSON in this format:
   "threads": "text..."
 }}"""
 
-    # 1. Try Groq Primary Engine across active model aliases
+    # 1. Try Groq Primary Engine across active verified model IDs
     if GROQ_API_KEY:
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {
@@ -122,7 +121,7 @@ Return ONLY raw JSON in this format:
             except Exception as e:
                 print(f"[!] Groq model '{model}' failed: {e}")
 
-    # 2. Try Gemini Fallback Engine across active model aliases
+    # 2. Try Gemini Fallback Engine
     gemini_keys = [k for k in [GEMINI_API_KEY, GEMINI_API_KEY_2] if k]
     for idx, key in enumerate(gemini_keys):
         genai.configure(api_key=key)
