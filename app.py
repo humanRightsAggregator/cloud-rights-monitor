@@ -82,7 +82,6 @@ def ingest_feeds_task():
                 if not link or check_article_exists(link, title):
                     continue
 
-                # Local Semantic Deduplication Check (Saves Gemini API Quota)
                 if is_semantic_duplicate(title):
                     stats["semantic_duplicates"] += 1
                     continue
@@ -126,7 +125,7 @@ def ingest_feeds_task():
 def publish_queue_task():
     print("[*] Starting scheduled peak-window publication...")
     recent_topics = get_recent_articles(limit=15)
-    batch = get_top_prioritized_queue(limit=2)
+    batch = get_top_prioritized_queue(limit=4)  # Increased batch size to 4
     run_errors = []
     published_items = []
 
@@ -137,7 +136,10 @@ def publish_queue_task():
                 supabase.table("article_queue").update({"status": "published"}).eq("id", article["id"]).execute()
                 article["results"] = results
                 published_items.append(article)
-            else: run_errors.append(f"Failed to publish '{article['title'][:25]}'.")
+            else:
+                # Mark as failed_retry to unblock the rest of the queue
+                supabase.table("article_queue").update({"status": "failed_retry"}).eq("id", article["id"]).execute()
+                run_errors.append(f"Failed to publish '{article['title'][:25]}'.")
             time.sleep(15)
         except Exception as e:
             run_errors.append(f"Error publishing '{article['title'][:25]}': {e}")
