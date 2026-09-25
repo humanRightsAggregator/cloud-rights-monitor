@@ -11,23 +11,25 @@ if GEMINI_API_KEY:
 MASTER_HASHTAGS = ["#HumanRights", "#HumanDignity", "#JusticeNow"]
 
 def get_active_model():
-    """Dynamically locates an active, supported Gemini model for this API key."""
-    try:
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                model_name = m.name.replace('models/', '')
-                if 'flash' in model_name:
-                    return genai.GenerativeModel(model_name)
-    except Exception as e:
-        print(f"[!] Dynamic model lookup notice: {e}")
+    """Dynamically locates a verified active Gemini model for this API key."""
+    preferred_candidates = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-latest']
 
-    for candidate in ['gemini-2.0-flash', 'gemini-1.5-flash-latest']:
+    for candidate in preferred_candidates:
         try:
             return genai.GenerativeModel(candidate)
         except Exception:
             continue
 
-    return genai.GenerativeModel('gemini-2.0-flash')
+    try:
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods and 'flash' in m.name:
+                model_name = m.name.replace('models/', '')
+                if '2.5' not in model_name:
+                    return genai.GenerativeModel(model_name)
+    except Exception as e:
+        print(f"[!] Dynamic model lookup notice: {e}")
+
+    return genai.GenerativeModel('gemini-1.5-flash')
 
 def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list) -> tuple:
     fallback_threads = f"{title}\n\n{snippet[:200]}...\n\nSource: {link}\n\n#HumanRights"
@@ -68,22 +70,24 @@ def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list) 
     }}
     """
 
-    try:
-        model = get_active_model()
-        response = model.generate_content(prompt)
-        clean_text = response.text.replace('```json', '').replace('```', '').strip()
-        data = json.loads(clean_text)
+    for model_candidate in ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-latest']:
+        try:
+            model = genai.GenerativeModel(model_candidate)
+            response = model.generate_content(prompt)
+            clean_text = response.text.replace('```json', '').replace('```', '').strip()
+            data = json.loads(clean_text)
 
-        return {
-            "threads": data.get("threads", fallback_threads),
-            "facebook": data.get("facebook", fallback_long),
-            "instagram": data.get("instagram", fallback_long)
-        }, None
+            return {
+                "threads": data.get("threads", fallback_threads),
+                "facebook": data.get("facebook", fallback_long),
+                "instagram": data.get("instagram", fallback_long)
+            }, None
+        except Exception as e:
+            print(f"[!] Draft generation failed on model '{model_candidate}': {e}")
+            continue
 
-    except Exception as e:
-        print(f"[!] Gemini generation error: {e}")
-        return {
-            "threads": fallback_threads,
-            "facebook": fallback_long,
-            "instagram": fallback_long
-        }, str(e)
+    return {
+        "threads": fallback_threads,
+        "facebook": fallback_long,
+        "instagram": fallback_long
+    }, "All draft generation models failed"
