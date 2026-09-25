@@ -6,12 +6,16 @@ from config import SUPABASE_URL, SUPABASE_KEY
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
 def check_article_exists(url: str, title: str) -> bool:
-    """Checks if the exact URL or exact title already exists in Supabase article_queue."""
+    """Checks if the exact URL or title exists using safe parameter binding."""
     if not supabase:
         return False
     try:
-        res = supabase.table("article_queue").select("id").or_(f"url.eq.{url},title.eq.{title}").execute()
-        return len(res.data) > 0
+        res_url = supabase.table("article_queue").select("id").eq("url", url).execute()
+        if res_url.data and len(res_url.data) > 0:
+            return True
+            
+        res_title = supabase.table("article_queue").select("id").eq("title", title).execute()
+        return len(res_title.data) > 0 if res_title.data else False
     except Exception as e:
         print(f"[!] Database check error: {e}")
         return False
