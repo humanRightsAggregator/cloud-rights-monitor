@@ -1,25 +1,54 @@
 import json
+import requests
 import google.generativeai as genai
-from config import GEMINI_API_KEY, GEMINI_API_KEY_2
+from config import GROQ_API_KEY, GEMINI_API_KEY, GEMINI_API_KEY_2
 
 def get_authorized_models() -> list:
-    """Returns a list of active Gemini model instances configured across available API keys."""
-    models = []
-    keys = [k.strip() for k in [GEMINI_API_KEY, GEMINI_API_KEY_2] if k and k.strip()]
+    """Returns list of active AI scoring functions."""
+    return [calculate_ai_score_groq, calculate_ai_score_gemini]
+
+def calculate_ai_score_groq(title: str, snippet: str) -> float:
+    """Calculates news urgency score using Groq API."""
+    if not GROQ_API_KEY:
+        raise ValueError("GROQ_API_KEY not configured")
+
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    prompt = f"Rate the human rights news urgency of this item from 1.0 to 10.0. Return ONLY a single numeric float.\nTitle: {title}\nSnippet: {snippet}"
+    
+    payload = {
+        "model": "llama-3.3-70b-versatile",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2
+    }
+    
+    res = requests.post(url, headers=headers, json=payload, timeout=10)
+    data = res.json()
+    content = data["choices"][0]["message"]["content"].strip()
+    return float(content)
+
+def calculate_ai_score_gemini(title: str, snippet: str) -> float:
+    """Calculates news urgency score using Gemini API fallback."""
+    keys = [k for k in [GEMINI_API_KEY, GEMINI_API_KEY_2] if k]
+    if not keys:
+        raise ValueError("No Gemini keys configured")
+
+    prompt = f"Rate the human rights news urgency of this item from 1.0 to 10.0. Return ONLY a single numeric float.\nTitle: {title}\nSnippet: {snippet}"
     for key in keys:
         try:
             genai.configure(api_key=key)
-            models.append(genai.GenerativeModel("gemini-1.5-flash"))
-        except Exception as e:
-            print(f"[!] Failed to initialize Gemini model instance: {e}")
-    return models
+            model = genai.GenerativeModel("gemini-1.5-flash")
+            response = model.generate_content(prompt)
+            return float(response.text.strip())
+        except Exception:
+            continue
+    raise RuntimeError("All Gemini keys failed")
 
 def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list = None) -> tuple:
-    """Generates platform-tailored social media captions using multi-key Gemini failover."""
-    keys = [k.strip() for k in [GEMINI_API_KEY, GEMINI_API_KEY_2] if k and k.strip()]
-    if not keys:
-        return None, "No Gemini API keys configured."
-
+    """Generates drafts via Groq (Primary, 14,400 RPD) with Gemini Fallback."""
     prompt = f"""You are a human rights journalist crafting engaging social media posts.
 
 Article Title: {title}
@@ -40,13 +69,39 @@ Return ONLY raw JSON in this format:
   "threads": "text..."
 }}"""
 
-    for idx, key in enumerate(keys):
+    # 1. Try Groq Primary Engine
+    if GROQ_API_KEY:
+        try:
+            url = "https://api.groq.com/openai/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": "llama-3.3-70b-versatile",
+                "messages": [{"role": "user", "content": prompt}],
+                "response_format": {"type": "json_object"},
+                "temperature": 0.3
+            }
+            res = requests.post(url, headers=headers, json=payload, timeout=12)
+            if res.status_code == 200:
+                data = res.json()
+                content = data["choices"][0]["message"]["content"].strip()
+                drafts = json.loads(content)
+                return drafts, None
+            else:
+                print(f"[!] Groq Primary Engine API Error: {res.text}")
+        except Exception as e:
+            print(f"[!] Groq Primary Engine Failed: {e}. Rotating to Gemini Fallback...")
+
+    # 2. Try Gemini Fallback Engine
+    gemini_keys = [k for k in [GEMINI_API_KEY, GEMINI_API_KEY_2] if k]
+    for idx, key in enumerate(gemini_keys):
         try:
             genai.configure(api_key=key)
             model = genai.GenerativeModel("gemini-1.5-flash")
             response = model.generate_content(prompt)
             clean_text = response.text.strip()
-            
             if clean_text.startswith("```json"):
                 clean_text = clean_text[7:]
             if clean_text.endswith("```"):
@@ -55,10 +110,6 @@ Return ONLY raw JSON in this format:
             drafts = json.loads(clean_text.strip())
             return drafts, None
         except Exception as e:
-            print(f"[!] Gemini Key {idx+1} failed: {e}")
-            if "429" in str(e) and idx < len(keys) - 1:
-                print(f"[*] Rotating to Gemini Key {idx+2}...")
-                continue
-            return None, str(e)
+            print(f"[!] Gemini Fallback Key {idx+1} failed: {e}")
 
-    return None, "All Gemini API keys exhausted or failed."
+    return None, "All AI drafting engines (Groq & Gemini) failed."
