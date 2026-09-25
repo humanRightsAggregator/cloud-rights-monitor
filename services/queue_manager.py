@@ -1,4 +1,5 @@
 import json
+import time
 from datetime import datetime, timezone
 import google.generativeai as genai
 from config import GEMINI_API_KEY
@@ -31,12 +32,13 @@ def score_article_with_ai(title: str, snippet: str) -> tuple:
     """
     try:
         model = get_active_model()
-        # Enforce JSON mode to prevent parsing errors
-        res = model.generate_content(
-            prompt,
-            generation_config={"response_mime_type": "application/json"}
-        )
-        clean_text = res.text.strip()
+        try:
+            gen_config = genai.types.GenerationConfig(response_mime_type="application/json")
+            res = model.generate_content(prompt, generation_config=gen_config)
+        except Exception:
+            res = model.generate_content(prompt)
+
+        clean_text = res.text.replace('```json', '').replace('```', '').strip()
         data = json.loads(clean_text)
         
         imp = float(data.get("importance_score", 0.0))
@@ -57,7 +59,6 @@ def process_and_queue_article(title: str, snippet: str, url: str, image_url: str
 
     imp_score, pop_score, err = score_article_with_ai(title, snippet)
 
-    # Prevent silent purge: if AI fails, mark as 'needs_rescore' instead of auto-purging
     if err or imp_score is None:
         supabase.table("article_queue").upsert({
             "url": url,
@@ -74,7 +75,6 @@ def process_and_queue_article(title: str, snippet: str, url: str, image_url: str
 
     combined_score = round((imp_score * 0.6) + (pop_score * 0.4), 2)
 
-    # 1. Auto-Purge Rule (< 5.5)
     if combined_score < 5.5:
         supabase.table("article_queue").upsert({
             "url": url,
@@ -89,7 +89,6 @@ def process_and_queue_article(title: str, snippet: str, url: str, image_url: str
         }, on_conflict="url").execute()
         return {"action": "discarded", "score": combined_score}
 
-    # 2. Breaking News Fast-Track (>= 9.0)
     status = "fast_tracked" if combined_score >= 9.0 else "queued"
 
     record = supabase.table("article_queue").upsert({
@@ -149,32 +148,34 @@ def rescore_discarded_or_pending_articles() -> dict:
     errors = []
 
     for item in items:
-        # Rescore if it was stuck on default 5.0 or marked for rescore
         if item["combined_score"] in [5.0, 0.0] or item["status"] == "needs_rescore":
             imp_score, pop_score, err = score_article_with_ai(item["title"], item["snippet"])
+            
             if err or imp_score is None:
-                errors.append(f"Rescore error for '{item['title'][:25]}': {err}")
-                continue
-
-            combined_score = round((imp_score * 0.6) + (pop_score * 0.4), 2)
-            
-            if combined_score >= 9.0:
-                new_status = "fast_tracked"
-                fast_tracked += 1
-            elif combined_score >= 5.5:
-                new_status = "queued"
-                newly_queued += 1
+                errors.append(f"'{item['title'][:30]}': {err}")
             else:
-                new_status = "discarded"
+                combined_score = round((imp_score * 0.6) + (pop_score * 0.4), 2)
+                
+                if combined_score >= 9.0:
+                    new_status = "fast_tracked"
+                    fast_tracked += 1
+                elif combined_score >= 5.5:
+                    new_status = "queued"
+                    newly_queued += 1
+                else:
+                    new_status = "discarded"
 
-            supabase.table("article_queue").update({
-                "importance_score": imp_score,
-                "popularity_score": pop_score,
-                "combined_score": combined_score,
-                "status": new_status
-            }).eq("id", item["id"]).execute()
-            
-            rescored_total += 1
+                supabase.table("article_queue").update({
+                    "importance_score": imp_score,
+                    "popularity_score": pop_score,
+                    "combined_score": combined_score,
+                    "status": new_status
+                }).eq("id", item["id"]).execute()
+                
+                rescored_total += 1
+
+            # 2.5-second pacing delay to remain safely under the Gemini 15 RPM limit
+            time.sleep(2.5)
 
     return {
         "rescored_total": rescored_total,
