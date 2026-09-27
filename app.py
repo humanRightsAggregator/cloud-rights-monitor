@@ -101,9 +101,8 @@ def ingest_feeds_task():
                 elif res["action"] == "fast_tracked":
                     stats["fast_tracked"].append(title)
                     publish_single_article(res["data"], recent_topics)
-                    supabase.table("article_queue").update({"status": "published"}).eq("url", link).execute()
-                elif res["action"] == "needs_rescore":
-                    run_errors.append(f"AI Score Failed: {res.get('error')}")
+                    if supabase:
+                        supabase.table("article_queue").update({"status": "published"}).eq("url", link).execute()
         except Exception as e:
             run_errors.append(f"Feed error {feed_url}: {e}")
 
@@ -111,13 +110,18 @@ def ingest_feeds_task():
     stats["top_queued"].sort(key=lambda x: x.get("combined_score", 0), reverse=True)
 
     send_ingestion_summary(stats, run_errors)
-    print(f"[+] Ingestion complete. Evaluated: {stats['evaluated_count']}, Semantic Duplicates Blocked: {stats['semantic_duplicates']}")
+    print(f"[+] Ingestion complete. Evaluated: {stats['evaluated_count']}")
 
+    # Fixed: Safely process low-tier background items using 'url' instead of 'id'
     if stats["low_tier_items"]:
         print(f"[*] Starting background drip-feed for {len(stats['low_tier_items'])} low-tier items...")
         for idx, item in enumerate(stats["low_tier_items"]):
-            publish_single_article(item, recent_topics)
-            supabase.table("article_queue").update({"status": "published"}).eq("id", item["id"]).execute()
+            try:
+                publish_single_article(item, recent_topics)
+                if supabase and "url" in item:
+                    supabase.table("article_queue").update({"status": "published"}).eq("url", item["url"]).execute()
+            except Exception as e:
+                print(f"[!] Low tier drip error: {e}")
             if idx < len(stats["low_tier_items"]) - 1:
                 time.sleep(180)
         print("[+] Low-tier drip-feed complete.")
@@ -125,7 +129,7 @@ def ingest_feeds_task():
 def publish_queue_task():
     print("[*] Starting scheduled peak-window publication...")
     recent_topics = get_recent_articles(limit=15)
-    batch = get_top_prioritized_queue(limit=4)  # Increased batch size to 4
+    batch = get_top_prioritized_queue(limit=4)
     run_errors = []
     published_items = []
 
@@ -133,12 +137,15 @@ def publish_queue_task():
         try:
             results = publish_single_article(article, recent_topics)
             if any(results.values()):
-                supabase.table("article_queue").update({"status": "published"}).eq("id", article["id"]).execute()
+                if supabase:
+                    match_key = "id" if "id" in article else "url"
+                    supabase.table("article_queue").update({"status": "published"}).eq(match_key, article[match_key]).execute()
                 article["results"] = results
                 published_items.append(article)
             else:
-                # Mark as failed_retry to unblock the rest of the queue
-                supabase.table("article_queue").update({"status": "failed_retry"}).eq("id", article["id"]).execute()
+                if supabase:
+                    match_key = "id" if "id" in article else "url"
+                    supabase.table("article_queue").update({"status": "failed_retry"}).eq(match_key, article[match_key]).execute()
                 run_errors.append(f"Failed to publish '{article['title'][:25]}'.")
             time.sleep(15)
         except Exception as e:
@@ -158,28 +165,17 @@ def generate_story_card_endpoint(title: str = "Human Rights Report", img: str = 
 
 @app.api_route("/check-tokens", methods=["GET", "HEAD"])
 def check_meta_tokens():
-    """Validates Meta API access token via direct account ping with sanitized query params."""
     token = META_ACCESS_TOKEN.strip() if META_ACCESS_TOKEN else ""
     if not token:
-        return {"status": "error", "message": "META_ACCESS_TOKEN is missing in environment variables"}
+        return {"status": "error", "message": "META_ACCESS_TOKEN is missing"}
     
     url = "https://graph.facebook.com/v19.0/me"
     try:
         res = requests.get(url, params={"access_token": token}, timeout=10)
         data = res.json()
-        
         if res.status_code == 200 and "id" in data:
-            return {
-                "status": "valid",
-                "message": "Token is active and authorized for publishing.",
-                "account_id": data.get("id"),
-                "account_name": data.get("name", "N/A")
-            }
-        else:
-            err_msg = data.get("error", {}).get("message", "Unknown error")
-            msg = f"🚨 *URGENT META TOKEN ERROR*\n\nYour Meta Access Token failed validation: {err_msg}"
-            send_telegram_message(msg)
-            return {"status": "invalid", "error": data}
+            return {"status": "valid", "account_id": data.get("id"), "account_name": data.get("name")}
+        return {"status": "invalid", "error": data}
     except Exception as e:
         return {"status": "error", "exception": str(e)}
 
