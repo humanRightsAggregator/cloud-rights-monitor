@@ -65,7 +65,7 @@ def publish_single_article(article_data: dict, recent_topics: list) -> dict:
 
     results = {"Threads": False, "Facebook": False, "Instagram": False, "IG Story": False, "FB Story": False}
 
-    # Isolated publishing calls to ensure one platform failure does not block DB updates
+    # Isolated platform publishing calls
     try:
         results["Threads"] = post_to_threads(drafts.get("threads", ""), feed_image if feed_image != DEFAULT_BRAND_IMAGE else None)
     except Exception as e:
@@ -93,7 +93,7 @@ def publish_single_article(article_data: dict, recent_topics: list) -> dict:
     except Exception as e:
         print(f"[!] Facebook Story exception: {e}")
 
-    # Guaranteed status update to published
+    # Guaranteed status update
     if any(results.values()):
         mark_article_status(article_data, "published")
         send_telegram_notification(drafts.get("facebook", ""), title, results)
@@ -161,7 +161,7 @@ def ingest_feeds_task():
             try:
                 publish_single_article(item, recent_topics)
             except Exception as e:
-                print(f"[!] Low tier drip error: {e}")
+                print(f"[!] Low-tier drip error: {e}")
             if idx < len(stats["low_tier_items"]) - 1:
                 time.sleep(180)
         print("[+] Low-tier drip-feed complete.")
