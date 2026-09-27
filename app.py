@@ -34,6 +34,18 @@ def clean_html(raw_html: str) -> str:
     clean_text = re.sub(r'<[^>]+>', ' ', raw_html)
     return re.sub(r'\s+', ' ', html.unescape(clean_text)).strip()
 
+def mark_article_status(article_data: dict, status: str):
+    """Safely updates article status in Supabase by matching 'id' or 'url'."""
+    if not supabase:
+        return
+    try:
+        if "id" in article_data and article_data["id"]:
+            supabase.table("article_queue").update({"status": status}).eq("id", article_data["id"]).execute()
+        elif "url" in article_data and article_data["url"]:
+            supabase.table("article_queue").update({"status": status}).eq("url", article_data["url"]).execute()
+    except Exception as e:
+        print(f"[!] Failed to update status to {status}: {e}")
+
 def publish_single_article(article_data: dict, recent_topics: list) -> dict:
     title = article_data["title"]
     snippet = article_data["snippet"]
@@ -41,21 +53,54 @@ def publish_single_article(article_data: dict, recent_topics: list) -> dict:
     feed_image = article_data.get("image_url") or DEFAULT_BRAND_IMAGE
     story_image_url = f"https://cloud-rights-monitor.onrender.com/generate-story-card?title={quote_plus(title)}&img={quote_plus(feed_image)}"
 
+    # Immediately mark as processing so concurrent/subsequent runs skip it
+    mark_article_status(article_data, "processing")
+
     drafts, ai_err = generate_ai_draft(title, snippet, link, recent_topics)
-    if drafts and isinstance(drafts, dict):
-        save_article_draft(link, title, drafts.get("facebook", ""), "processing")
+    if not drafts or not isinstance(drafts, dict):
+        mark_article_status(article_data, "failed_retry")
+        return {}
 
-        t_ok = post_to_threads(drafts.get("threads", ""), feed_image if feed_image != DEFAULT_BRAND_IMAGE else None)
-        fb_ok = post_to_facebook(drafts.get("facebook", ""), link, feed_image if feed_image != DEFAULT_BRAND_IMAGE else None)
-        ig_ok = post_to_instagram(drafts.get("instagram", ""), feed_image)
-        time.sleep(3)
-        ig_story_ok = post_story_to_instagram(story_image_url)
-        fb_story_ok = post_story_to_facebook(story_image_url)
+    save_article_draft(link, title, drafts.get("facebook", ""), "processing")
 
-        results = {"Threads": t_ok, "Facebook": fb_ok, "Instagram": ig_ok, "IG Story": ig_story_ok, "FB Story": fb_story_ok}
+    results = {"Threads": False, "Facebook": False, "Instagram": False, "IG Story": False, "FB Story": False}
+
+    # Isolated publishing calls to ensure one platform failure does not block DB updates
+    try:
+        results["Threads"] = post_to_threads(drafts.get("threads", ""), feed_image if feed_image != DEFAULT_BRAND_IMAGE else None)
+    except Exception as e:
+        print(f"[!] Threads exception: {e}")
+
+    try:
+        results["Facebook"] = post_to_facebook(drafts.get("facebook", ""), link, feed_image if feed_image != DEFAULT_BRAND_IMAGE else None)
+    except Exception as e:
+        print(f"[!] Facebook Feed exception: {e}")
+
+    try:
+        results["Instagram"] = post_to_instagram(drafts.get("instagram", ""), feed_image)
+    except Exception as e:
+        print(f"[!] Instagram Feed exception: {e}")
+
+    time.sleep(3)
+
+    try:
+        results["IG Story"] = post_story_to_instagram(story_image_url)
+    except Exception as e:
+        print(f"[!] Instagram Story exception: {e}")
+
+    try:
+        results["FB Story"] = post_story_to_facebook(story_image_url)
+    except Exception as e:
+        print(f"[!] Facebook Story exception: {e}")
+
+    # Guaranteed status update to published
+    if any(results.values()):
+        mark_article_status(article_data, "published")
         send_telegram_notification(drafts.get("facebook", ""), title, results)
-        return results
-    return {}
+    else:
+        mark_article_status(article_data, "failed_retry")
+
+    return results
 
 def ingest_feeds_task():
     print("[*] Starting feed ingestion and scoring run...")
@@ -101,8 +146,6 @@ def ingest_feeds_task():
                 elif res["action"] == "fast_tracked":
                     stats["fast_tracked"].append(title)
                     publish_single_article(res["data"], recent_topics)
-                    if supabase:
-                        supabase.table("article_queue").update({"status": "published"}).eq("url", link).execute()
         except Exception as e:
             run_errors.append(f"Feed error {feed_url}: {e}")
 
@@ -112,14 +155,11 @@ def ingest_feeds_task():
     send_ingestion_summary(stats, run_errors)
     print(f"[+] Ingestion complete. Evaluated: {stats['evaluated_count']}")
 
-    # Fixed: Safely process low-tier background items using 'url' instead of 'id'
     if stats["low_tier_items"]:
         print(f"[*] Starting background drip-feed for {len(stats['low_tier_items'])} low-tier items...")
         for idx, item in enumerate(stats["low_tier_items"]):
             try:
                 publish_single_article(item, recent_topics)
-                if supabase and "url" in item:
-                    supabase.table("article_queue").update({"status": "published"}).eq("url", item["url"]).execute()
             except Exception as e:
                 print(f"[!] Low tier drip error: {e}")
             if idx < len(stats["low_tier_items"]) - 1:
@@ -137,15 +177,9 @@ def publish_queue_task():
         try:
             results = publish_single_article(article, recent_topics)
             if any(results.values()):
-                if supabase:
-                    match_key = "id" if "id" in article else "url"
-                    supabase.table("article_queue").update({"status": "published"}).eq(match_key, article[match_key]).execute()
                 article["results"] = results
                 published_items.append(article)
             else:
-                if supabase:
-                    match_key = "id" if "id" in article else "url"
-                    supabase.table("article_queue").update({"status": "failed_retry"}).eq(match_key, article[match_key]).execute()
                 run_errors.append(f"Failed to publish '{article['title'][:25]}'.")
             time.sleep(15)
         except Exception as e:
