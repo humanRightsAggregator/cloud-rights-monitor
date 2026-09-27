@@ -1,34 +1,39 @@
 import re
 import requests
-from urllib.parse import quote_plus
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 }
 
-# Block generic logos, Google placeholders, and small icons
-BLOCKED_PATTERNS = [
-    "googleusercontent.com", "gstatic.com", "google.com/news",
-    "favicon", "avatar", "logo-small", "default-brand"
+# Strict filter blocking Google logos, generic thumbnails, and UI icons
+BLOCKED_DOMAINS = [
+    "googleusercontent.com", "gstatic.com", "google.com",
+    "favicon", "avatar", "logo-small", "default-brand", "s0-w300"
 ]
 
 def is_valid_news_image(url: str) -> bool:
-    """Filters out generic placeholders, icons, and Google News logos."""
+    """Rejects Google News thumbnails, generic logos, and placeholder icons."""
     if not url or not url.startswith("http"):
         return False
     lower_url = url.lower()
-    return not any(b in lower_url for b in BLOCKED_PATTERNS)
+    return not any(blocked in lower_url for blocked in BLOCKED_DOMAINS)
 
-def get_dynamic_keyword_image(text: str) -> str:
-    """Generates a topic-matched image URL based on title keywords."""
+def get_topic_fallback(text: str) -> str:
+    """Returns a high-quality Unsplash image matched to article keywords."""
     clean = re.sub(r'[^a-zA-Z0-9 ]', '', text.lower())
-    words = [w for k in ["court", "trial", "protest", "war", "journal", "police", "refugee", "election", "rights"] for w in clean.split() if k in w]
-    query = words[0] if words else "humanitarian"
-    return f"https://images.unsplash.com/photo-1589829545856-d10d557cf95f?q=80&w=1080&auto=format&fit=crop&sig={hash(text) % 1000}"
+    if any(k in clean for k in ["court", "trial", "legal", "law", "judge"]):
+        return "https://images.unsplash.com/photo-1589829545856-d10d557cf95f?q=80&w=1080&auto=format&fit=crop"
+    elif any(k in clean for k in ["protest", "demonstrat", "march", "activist"]):
+        return "https://images.unsplash.com/photo-1531206715517-5c0ba140b2b8?q=80&w=1080&auto=format&fit=crop"
+    elif any(k in clean for k in ["press", "media", "journal", "reporter", "speech"]):
+        return "https://images.unsplash.com/photo-1585829365295-ab7cd400c167?q=80&w=1080&auto=format&fit=crop"
+    elif any(k in clean for k in ["war", "conflict", "refugee", "civilian", "strike"]):
+        return "https://images.unsplash.com/photo-1541872703-74c5e44368f9?q=80&w=1080&auto=format&fit=crop"
+    return "https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=1080&auto=format&fit=crop"
 
 def extract_article_image(entry: dict, article_url: str) -> str:
-    """Scrapes OpenGraph image from real publisher URL, filtering out Google News logos."""
-    # 1. Check RSS feed enclosure / media:content
+    """Extracts genuine news lead photo, filtering out Google News thumbnails."""
+    # 1. Check RSS media content / enclosures
     if "media_content" in entry and entry["media_content"]:
         for media in entry["media_content"]:
             u = media.get("url", "")
@@ -41,14 +46,12 @@ def extract_article_image(entry: dict, article_url: str) -> str:
             if is_valid_news_image(u):
                 return u
 
-    # 2. Scrape OpenGraph / Twitter metadata directly from webpage
+    # 2. Scrape OpenGraph image directly from webpage HTML
     if article_url and article_url.startswith("http"):
         try:
             res = requests.get(article_url, headers=HEADERS, timeout=6, allow_redirects=True)
             if res.status_code == 200:
                 html_text = res.text
-                
-                # Check og:image or twitter:image meta tags
                 pattern = r'<meta\s+[^>]*?(?:property|name)=["\'](?:og:image|twitter:image)["\']\s+[^>]*?content=["\']([^"\']+)["\']'
                 match = re.search(pattern, html_text, re.IGNORECASE)
                 
@@ -63,5 +66,5 @@ def extract_article_image(entry: dict, article_url: str) -> str:
         except Exception:
             pass
 
-    # 3. Dynamic Topic Fallback
-    return get_dynamic_keyword_image(entry.get('title', 'human rights'))
+    # 3. Keyword Topic Fallback
+    return get_topic_fallback(f"{entry.get('title', '')} {entry.get('summary', '')}")
