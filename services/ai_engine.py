@@ -4,18 +4,19 @@ import requests
 import google.generativeai as genai
 from config import GROQ_API_KEY, GEMINI_API_KEY, GEMINI_API_KEY_2
 
-# Verified active Model IDs directly from GroqCloud Docs
+# Active models on GroqCloud
 GROQ_MODELS = [
-    "llama-3.3-70b-versatile",
     "llama-3.1-8b-instant",
+    "llama-3.3-70b-versatile",
     "openai/gpt-oss-20b",
     "qwen/qwen3.8-27b"
 ]
 
 # Active models on Gemini
 GEMINI_MODELS = [
-    "gemini-1.5-flash",
-    "gemini-2.0-flash"
+    "gemini-2.0-flash",
+    "gemini-1.5-flash-8b",
+    "gemini-1.5-pro"
 ]
 
 def get_authorized_models() -> list:
@@ -75,7 +76,7 @@ def calculate_ai_score_gemini(title: str, snippet: str) -> float:
     raise RuntimeError("All Gemini keys/models failed")
 
 def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list = None) -> tuple:
-    """Generates drafts via Groq (Primary) with Gemini Fallback across model aliases."""
+    """Generates drafts via Groq (Primary) with Gemini Fallback across active model endpoints."""
     prompt = f"""You are a human rights journalist crafting engaging social media posts.
 
 Article Title: {title}
@@ -96,7 +97,7 @@ Return ONLY raw JSON in this format:
   "threads": "text..."
 }}"""
 
-    # 1. Try Groq Primary Engine across active verified model IDs
+    # 1. Try Groq Primary Engine
     if GROQ_API_KEY:
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {
