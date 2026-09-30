@@ -16,7 +16,7 @@ def calculate_urgency_score(title: str, snippet: str) -> float:
     return 7.0
 
 def process_and_queue_article(title: str, snippet: str, link: str, image_url: str, source: str) -> dict:
-    """Evaluates and routes incoming RSS items into the pipeline, guaranteeing DB record creation."""
+    """Evaluates and routes incoming RSS items, enforcing Supabase records for all tiers."""
     score = calculate_urgency_score(title, snippet)
     item_data = {
         "title": title,
@@ -27,7 +27,7 @@ def process_and_queue_article(title: str, snippet: str, link: str, image_url: st
         "status": "pending"
     }
 
-    # CRITICAL FIX: Always save to Supabase first so check_article_exists() and mark_article_status() find the row!
+    # Always write to article_queue first so check_article_exists finds it
     if supabase:
         try:
             supabase.table("article_queue").upsert(item_data, on_conflict="url").execute()
@@ -41,7 +41,6 @@ def process_and_queue_article(title: str, snippet: str, link: str, image_url: st
     elif score >= 5.5:
         return {"action": "low_tier_immediate", "data": item_data}
     else:
-        # Mark discarded in DB so check_article_exists skips it in future runs
         if supabase:
             try:
                 supabase.table("article_queue").update({"status": "discarded"}).eq("url", link).execute()
