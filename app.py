@@ -11,7 +11,7 @@ from services.database import (
     check_article_exists, is_semantic_duplicate, save_article_draft, get_recent_articles, supabase
 )
 from services.ai_engine import generate_ai_draft
-from services.media_extractor import extract_article_image
+from services.media_extractor import extract_article_image, resolve_google_news_url
 from services.story_generator import create_story_card
 from services.queue_manager import (
     process_and_queue_article, get_top_prioritized_queue, get_queue_status_metrics,
@@ -120,20 +120,24 @@ def ingest_feeds_task():
         try:
             feed = feedparser.parse(feed_url)
             for entry in feed.entries[:5]:
-                title = clean_html(entry.get('title', 'Unknown Title'))
-                link = entry.get('link', '').strip()
+                raw_title = clean_html(entry.get('title', 'Unknown Title'))
+                raw_link = entry.get('link', '').strip()
                 snippet = clean_html(entry.get('summary', '') or entry.get('description', ''))
 
-                if not link or check_article_exists(link, title):
+                if not raw_link:
                     continue
 
-                if is_semantic_duplicate(title):
-                    stats["semantic_duplicates"] += 1
+                # 1. Resolve true publisher URL (strips dynamic Google redirect wrapper)
+                real_link = resolve_google_news_url(raw_link)
+
+                # 2. Comprehensive check against Supabase database (Exact URL, Normalized Title, Fuzzy Match)
+                if check_article_exists(real_link, raw_title) or is_semantic_duplicate(raw_title, threshold=0.70):
+                    print(f"[*] Article already processed/published: '{raw_title[:35]}...'")
                     continue
 
                 stats["evaluated_count"] += 1
-                img = extract_article_image(entry, link)
-                res = process_and_queue_article(title, snippet, link, img, feed_url)
+                img = extract_article_image(entry, real_link)
+                res = process_and_queue_article(raw_title, snippet, real_link, img, feed_url)
 
                 if res["action"] == "discarded":
                     stats["purged_count"] += 1
@@ -144,7 +148,7 @@ def ingest_feeds_task():
                     stats["queued_count"] += 1
                     if res.get("data"): stats["top_queued"].append(res["data"])
                 elif res["action"] == "fast_tracked":
-                    stats["fast_tracked"].append(title)
+                    stats["fast_tracked"].append(raw_title)
                     publish_single_article(res["data"], recent_topics)
         except Exception as e:
             run_errors.append(f"Feed error {feed_url}: {e}")
@@ -223,7 +227,7 @@ def trigger_ingestion(background_tasks: BackgroundTasks):
 
 @app.api_route("/publish-queue", methods=["GET", "HEAD"])
 def trigger_publishing(background_tasks: BackgroundTasks):
-    background_tasks.add_task(trigger_publishing)
+    background_tasks.add_task(publish_queue_task)
     return {"status": "Accepted", "task": "Peak Publishing"}
 
 @app.api_route("/rescore-queue", methods=["GET", "HEAD"])
