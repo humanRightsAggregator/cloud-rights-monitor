@@ -81,7 +81,7 @@ def publish_single_article(article_data: dict, recent_topics: list) -> dict:
     except Exception as e:
         print(f"[!] Instagram Feed exception: {e}")
 
-    time.sleep(3)
+    time.sleep(2)
 
     try:
         results["IG Story"] = post_story_to_instagram(story_image_url)
@@ -127,10 +127,8 @@ def ingest_feeds_task():
                 if not raw_link:
                     continue
 
-                # 1. Resolve true publisher URL (strips dynamic Google redirect wrapper)
                 real_link = resolve_google_news_url(raw_link)
 
-                # 2. Comprehensive check against Supabase database (Exact URL, Normalized Title, Fuzzy Match)
                 if check_article_exists(real_link, raw_title) or is_semantic_duplicate(raw_title, threshold=0.70):
                     print(f"[*] Article already processed/published: '{raw_title[:35]}...'")
                     continue
@@ -159,16 +157,17 @@ def ingest_feeds_task():
     send_ingestion_summary(stats, run_errors)
     print(f"[+] Ingestion complete. Evaluated: {stats['evaluated_count']}")
 
+    # Quick non-blocking execution for low-tier items
     if stats["low_tier_items"]:
-        print(f"[*] Starting background drip-feed for {len(stats['low_tier_items'])} low-tier items...")
+        print(f"[*] Processing {len(stats['low_tier_items'])} low-tier items...")
         for idx, item in enumerate(stats["low_tier_items"]):
             try:
                 publish_single_article(item, recent_topics)
             except Exception as e:
-                print(f"[!] Low-tier drip error: {e}")
+                print(f"[!] Low-tier processing error: {e}")
             if idx < len(stats["low_tier_items"]) - 1:
-                time.sleep(180)
-        print("[+] Low-tier drip-feed complete.")
+                time.sleep(5)  # Fast 5s pause prevents container shutdown locks on Render
+        print("[+] Low-tier processing complete.")
 
 def publish_queue_task():
     print("[*] Starting scheduled peak-window publication...")
@@ -185,7 +184,7 @@ def publish_queue_task():
                 published_items.append(article)
             else:
                 run_errors.append(f"Failed to publish '{article['title'][:25]}'.")
-            time.sleep(15)
+            time.sleep(5)
         except Exception as e:
             run_errors.append(f"Error publishing '{article['title'][:25]}': {e}")
 
