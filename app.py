@@ -53,7 +53,7 @@ def publish_single_article(article_data: dict, recent_topics: list) -> dict:
     feed_image = article_data.get("image_url") or DEFAULT_BRAND_IMAGE
     story_image_url = f"https://cloud-rights-monitor.onrender.com/generate-story-card?title={quote_plus(title)}&img={quote_plus(feed_image)}"
 
-    # Immediately mark as processing so concurrent/subsequent runs skip it
+    # Immediately mark as processing in DB so concurrent runs skip it
     mark_article_status(article_data, "processing")
 
     drafts, ai_err = generate_ai_draft(title, snippet, link, recent_topics)
@@ -65,7 +65,7 @@ def publish_single_article(article_data: dict, recent_topics: list) -> dict:
 
     results = {"Threads": False, "Facebook": False, "Instagram": False, "IG Story": False, "FB Story": False}
 
-    # Isolated platform publishing calls
+    # Isolated publishing calls
     try:
         results["Threads"] = post_to_threads(drafts.get("threads", ""), feed_image if feed_image != DEFAULT_BRAND_IMAGE else None)
     except Exception as e:
@@ -223,7 +223,7 @@ def trigger_ingestion(background_tasks: BackgroundTasks):
 
 @app.api_route("/publish-queue", methods=["GET", "HEAD"])
 def trigger_publishing(background_tasks: BackgroundTasks):
-    background_tasks.add_task(publish_queue_task)
+    background_tasks.add_task(trigger_publishing)
     return {"status": "Accepted", "task": "Peak Publishing"}
 
 @app.api_route("/rescore-queue", methods=["GET", "HEAD"])
