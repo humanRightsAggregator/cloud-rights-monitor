@@ -4,7 +4,6 @@ import requests
 import google.generativeai as genai
 from config import GROQ_API_KEY, GEMINI_API_KEY, GEMINI_API_KEY_2
 
-# Active models on GroqCloud
 GROQ_MODELS = [
     "llama-3.1-8b-instant",
     "llama-3.3-70b-versatile",
@@ -12,7 +11,6 @@ GROQ_MODELS = [
     "qwen/qwen3.8-27b"
 ]
 
-# Active models on Gemini
 GEMINI_MODELS = [
     "gemini-2.0-flash",
     "gemini-1.5-flash-8b",
@@ -20,11 +18,9 @@ GEMINI_MODELS = [
 ]
 
 def get_authorized_models() -> list:
-    """Returns list of active AI scoring functions."""
     return [calculate_ai_score_groq, calculate_ai_score_gemini]
 
 def calculate_ai_score_groq(title: str, snippet: str) -> float:
-    """Calculates news urgency score using verified Groq model IDs."""
     if not GROQ_API_KEY:
         raise ValueError("GROQ_API_KEY not configured")
 
@@ -56,7 +52,6 @@ def calculate_ai_score_groq(title: str, snippet: str) -> float:
     raise RuntimeError("All Groq models failed or returned invalid response.")
 
 def calculate_ai_score_gemini(title: str, snippet: str) -> float:
-    """Calculates news urgency score using Gemini API fallback."""
     keys = [k for k in [GEMINI_API_KEY, GEMINI_API_KEY_2] if k]
     if not keys:
         raise ValueError("No Gemini keys configured")
@@ -76,28 +71,25 @@ def calculate_ai_score_gemini(title: str, snippet: str) -> float:
     raise RuntimeError("All Gemini keys/models failed")
 
 def generate_ai_draft(title: str, snippet: str, link: str, recent_topics: list = None) -> tuple:
-    """Generates drafts via Groq (Primary) with Gemini Fallback across active model endpoints."""
+    """Generates drafts specifically for Threads and Instagram (No Facebook Page/Story)."""
     prompt = f"""You are a human rights journalist crafting engaging social media posts.
 
 Article Title: {title}
 Snippet: {snippet}
 Link: {link}
 
-Generate JSON output with exact keys: "facebook", "instagram", "threads".
+Generate JSON output with keys "threads" and "instagram".
 
 Rules:
-- "threads": Short, compelling, max 400 characters, no hashtags.
-- "facebook": Concise overview with call to action, max 800 characters.
+- "threads": Short, compelling post, max 400 characters, no hashtags.
 - "instagram": Engaging narrative with 3-5 relevant hashtags at the bottom.
 
 Return ONLY raw JSON in this format:
 {{
-  "facebook": "text...",
-  "instagram": "text...",
-  "threads": "text..."
+  "threads": "text...",
+  "instagram": "text..."
 }}"""
 
-    # 1. Try Groq Primary Engine
     if GROQ_API_KEY:
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {
@@ -122,7 +114,6 @@ Return ONLY raw JSON in this format:
             except Exception as e:
                 print(f"[!] Groq model '{model}' failed: {e}")
 
-    # 2. Try Gemini Fallback Engine
     gemini_keys = [k for k in [GEMINI_API_KEY, GEMINI_API_KEY_2] if k]
     for idx, key in enumerate(gemini_keys):
         genai.configure(api_key=key)
