@@ -20,19 +20,19 @@ def send_telegram_message(text: str) -> bool:
         print(f"[!] Telegram Exception: {e}")
         return False
 
-def send_telegram_notification(caption: str, title: str, platform_results: dict) -> bool:
-    status_lines = []
-    for platform, ok in platform_results.items():
-        icon = "✅" if ok else "❌"
-        status_lines.append(f"{icon} {platform}")
-    status_text = "\n".join(status_lines)
-    message = (
+def send_telegram_notification(draft_text: str, title: str, results: dict):
+    threads_status = "✅" if results.get("Threads") else "❌"
+    ig_status = "✅" if results.get("Instagram") else "❌"
+
+    msg = (
         f"📣 *AUTO-PUBLISH SUMMARY*\n\n"
-        f"📌 *Headline:* {title}\n\n"
-        f"📊 *Platform Status:*\n{status_text}\n\n"
-        f"📝 *Post Preview:*\n{caption[:250]}..."
+        f"📌 *Headline:* {title[:120]}\n\n"
+        f"📊 *Platform Status:*\n"
+        f"{threads_status} Threads\n"
+        f"{ig_status} Instagram\n\n"
+        f"📝 *Draft Overview:*\n{draft_text[:300]}..."
     )
-    return send_telegram_message(message)
+    send_telegram_message(msg)
 
 def send_ingestion_summary(stats: dict, run_errors: list = None) -> bool:
     errors_text = "\n".join([f"• {e}" for e in run_errors]) if run_errors else "• No errors. All systems optimal."
